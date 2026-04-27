@@ -1,0 +1,11 @@
+-- Agregar columnas para el sistema POS en la tabla ventas
+ALTER TABLE public.ventas 
+ADD COLUMN IF NOT EXISTS estado VARCHAR(50) DEFAULT 'borrador',
+ADD COLUMN IF NOT EXISTS origen VARCHAR(50) DEFAULT 'pos_manual',
+ADD COLUMN IF NOT EXISTS observacion TEXT,
+ADD COLUMN IF NOT EXISTS monto_original_mxn NUMERIC(10,2) DEFAULT 0,
+ADD COLUMN IF NOT EXISTS monto_descuento_mxn NUMERIC(10,2) DEFAULT 0,
+ADD COLUMN IF NOT EXISTS monto_final_mxn NUMERIC(10,2) DEFAULT 0,
+ADD COLUMN IF NOT EXISTS anticipo_aplicado_mxn NUMERIC(10,2) DEFAULT 0,
+ADD COLUMN IF NOT EXISTS total_pagado_mxn NUMERIC(10,2) DEFAULT 0,
+ADD COLUMN IF NOT EXISTS saldo_pendiente_mxn NUMERIC(10,2) DEFAULT 0;

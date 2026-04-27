@@ -1,0 +1,46 @@
+project_id = "ckiwuneigsdotfwrxmbu"
+
+[functions.reset-password-admin]
+verify_jwt = false
+
+[functions.clientes-reporte-importar]
+verify_jwt = true
+
+[functions.clientes-reporte-api]
+verify_jwt = true
+
+[functions.ventas-detalle-importar]
+verify_jwt = true
+
+[functions.ventas-detalle-api]
+verify_jwt = true
+
+[functions.productividad-importar]
+verify_jwt = true
+
+[functions.productividad-api]
+verify_jwt = true
+
+[functions.gasto-clientes-importar]
+verify_jwt = true
+
+[functions.gasto-clientes]
+verify_jwt = true
+
+[functions.daysheet-importar]
+verify_jwt = true
+
+[functions.daysheet]
+verify_jwt = true
+
+[functions.proyeccion-futuro-importar]
+verify_jwt = true
+
+[functions.proyeccion-futuro]
+verify_jwt = true
+
+[functions.ventas-categorias-importar]
+verify_jwt = true
+
+[functions.ventas-categorias]
+verify_jwt = true
