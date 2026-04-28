@@ -1,324 +1,195 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { CalendarDays, DollarSign } from "lucide-react";
+
 import { supabase } from "@/integrations/supabase/client";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Upload, Download, Search, Calendar, DollarSign, CheckCircle, XCircle, Users } from "lucide-react";
-import { toast } from "sonner";
-import * as XLSX from 'xlsx';
-import AppLayout from "@/components/layout/AppLayout";
+
+type DaySheetRow = {
+  id: number;
+  hora: string;
+  cliente: string;
+  servicio: string;
+  empleado: string;
+  duracion: number;
+  precio: number;
+};
+
+const currency = (value: number) =>
+  new Intl.NumberFormat("es-CL", {
+    style: "currency",
+    currency: "CLP",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(value || 0);
+
+const fullName = (person?: { nombre: string | null; apellidos: string | null } | null, fallback = "—") => {
+  const name = `${person?.nombre || ""} ${person?.apellidos || ""}`.trim();
+  return name || fallback;
+};
 
 const DaySheet = () => {
-  const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterSucursal, setFilterSucursal] = useState("all");
-  const [filterProfesional, setFilterProfesional] = useState("all");
-  const [filterEstado, setFilterEstado] = useState("all");
-  const [orderBy, setOrderBy] = useState("id");
-  const [orderDir, setOrderDir] = useState("desc");
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
 
-  const { data: daysheetData, isLoading, refetch } = useQuery({
-    queryKey: ['daysheet', searchTerm, filterSucursal, filterProfesional, filterEstado, orderBy, orderDir],
+  const { data, isLoading } = useQuery({
+    queryKey: ["daysheet-real", selectedDate],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (searchTerm) params.append('search', searchTerm);
-      if (filterSucursal && filterSucursal !== 'all') params.append('sucursal', filterSucursal);
-      if (filterProfesional && filterProfesional !== 'all') params.append('profesional', filterProfesional);
-      if (filterEstado && filterEstado !== 'all') params.append('estado', filterEstado);
-      params.append('orderBy', orderBy);
-      params.append('orderDir', orderDir);
-      params.append('limit', '100');
+      const agendaSelect = `
+        id,
+        hora_inicio,
+        id_cliente,
+        id_empleado,
+        id_servicio,
+        clientes:clientes!agendas_id_cliente_fkey(nombre, apellidos),
+        empleados:empleados!agendas_id_empleado_fkey(nombre, apellidos),
+        servicios:servicios!agendas_id_servicio_fkey(nombre, precio, duracion_minutos)
+      `;
 
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
-        throw new Error("Debes iniciar sesión");
+      const { data: agendas, error } = await supabase
+        .from("agendas")
+        .select(agendaSelect)
+        .eq("fecha", selectedDate)
+        .order("hora_inicio", { ascending: true });
+
+      if (error) throw error;
+
+      const agendaRows = agendas || [];
+      const citaIds = agendaRows.map((a) => a.id);
+      const ventasMap = new Map<number, number>();
+
+      if (citaIds.length > 0) {
+        const { data: ventas, error: ventasError } = await supabase
+          .from("ventas")
+          .select("id_cita, total, monto_final_mxn, estado_venta")
+          .in("id_cita", citaIds)
+          .eq("estado_venta", "cerrada");
+
+        if (ventasError) throw ventasError;
+
+        (ventas || []).forEach((venta) => {
+          if (venta.id_cita) {
+            ventasMap.set(venta.id_cita, Number(venta.monto_final_mxn ?? venta.total ?? 0));
+          }
+        });
       }
 
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/daysheet?${params.toString()}`,
-        {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
+      const rows: DaySheetRow[] = agendaRows.map((item) => {
+        const precioServicio = Number(item.servicios?.precio || 0);
+        const precioVenta = ventasMap.get(item.id) || 0;
 
-      if (!response.ok) {
-        throw new Error('Error al cargar datos');
-      }
+        return {
+          id: item.id,
+          hora: item.hora_inicio,
+          cliente: fullName(item.clientes),
+          servicio: item.servicios?.nombre || "—",
+          empleado: fullName(item.empleados),
+          duracion: Number(item.servicios?.duracion_minutos || 0),
+          precio: precioVenta || precioServicio,
+        };
+      });
 
-      return await response.json();
+      return rows;
     },
   });
 
-  const handleFileUpload = async () => {
-    if (!file) {
-      toast.error("Por favor selecciona un archivo");
-      return;
-    }
-
-    setUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
-        toast.error("Debes iniciar sesión para importar archivos");
-        return;
-      }
-
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/daysheet-importar`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-          },
-          body: formData,
-        }
-      );
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || 'Error al importar archivo');
-      }
-
-      toast.success(result.message || "Archivo importado correctamente");
-      setFile(null);
-      refetch();
-    } catch (error) {
-      console.error('Error:', error);
-      toast.error(error instanceof Error ? error.message : "Error al importar archivo");
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const exportToExcel = () => {
-    if (!daysheetData?.data?.length) {
-      toast.error("No hay datos para exportar");
-      return;
-    }
-
-    const ws = XLSX.utils.json_to_sheet(daysheetData.data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "DaySheet");
-    XLSX.writeFile(wb, `daysheet_export_${new Date().toISOString().split('T')[0]}.xlsx`);
-    toast.success("Datos exportados correctamente");
-  };
-
-  // Obtener valores únicos para filtros
-  const sucursales = [...new Set(daysheetData?.data?.map((d: any) => d.sucursal).filter(Boolean))];
-  const profesionales = [...new Set(daysheetData?.data?.map((d: any) => d.profesional).filter(Boolean))];
-  const estados = [...new Set(daysheetData?.data?.map((d: any) => d.estado).filter(Boolean))];
+  const summary = useMemo(() => {
+    const rows = data || [];
+    return {
+      totalCitas: rows.length,
+      totalIngresos: rows.reduce((acc, row) => acc + row.precio, 0),
+    };
+  }, [data]);
 
   return (
-    <AppLayout>
-      <div className="container mx-auto p-6 space-y-6">
-        <div className="flex justify-between items-center">
-          <h1 className="text-3xl font-bold">DaySheet - Reporte de Citas</h1>
+    <div className="container mx-auto p-6 space-y-6">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Hoja del Día</h1>
+          <p className="text-muted-foreground">Citas ordenadas por hora con detalle comercial del día.</p>
         </div>
 
-        {/* Estadísticas */}
-        {daysheetData?.stats && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Citas</CardTitle>
-                <Calendar className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{daysheetData.stats.totalCitas}</div>
-              </CardContent>
-            </Card>
+        <div className="w-full md:w-64">
+          <Input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
+        </div>
+      </div>
 
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Completadas</CardTitle>
-                <CheckCircle className="h-4 w-4 text-green-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-green-600">{daysheetData.stats.citasCompletadas}</div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Canceladas</CardTitle>
-                <XCircle className="h-4 w-4 text-red-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-red-600">{daysheetData.stats.citasCanceladas}</div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Facturado</CardTitle>
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">${daysheetData.stats.totalFacturado}</div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        {/* Importar CSV */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
-          <CardHeader>
-            <CardTitle>Importar DaySheet</CardTitle>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total de citas</CardTitle>
+            <CalendarDays className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="flex gap-4 items-end">
-              <div className="flex-1">
-                <Input
-                  type="file"
-                  accept=".csv,.xlsx,.xls"
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
-                />
-              </div>
-              <Button onClick={handleFileUpload} disabled={!file || uploading}>
-                <Upload className="mr-2 h-4 w-4" />
-                {uploading ? "Importando..." : "Importar"}
-              </Button>
-            </div>
+            <div className="text-2xl font-bold">{summary.totalCitas}</div>
           </CardContent>
         </Card>
 
-        {/* Filtros y búsqueda */}
         <Card>
-          <CardHeader>
-            <CardTitle>Filtros</CardTitle>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Ingresos del día</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="relative">
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Buscar..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-8"
-                />
-              </div>
-
-              <Select value={filterSucursal} onValueChange={setFilterSucursal}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Todas las sucursales" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todas</SelectItem>
-                  {sucursales.map((s: any) => (
-                    <SelectItem key={s} value={s}>{s}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select value={filterProfesional} onValueChange={setFilterProfesional}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Todos los profesionales" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos</SelectItem>
-                  {profesionales.map((p: any) => (
-                    <SelectItem key={p} value={p}>{p}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select value={filterEstado} onValueChange={setFilterEstado}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Todos los estados" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos</SelectItem>
-                  {estados.map((e: any) => (
-                    <SelectItem key={e} value={e}>{e}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex gap-4 mt-4">
-              <Button onClick={exportToExcel} variant="outline">
-                <Download className="mr-2 h-4 w-4" />
-                Exportar a Excel
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Tabla de datos */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Citas del Día</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="text-center py-8">Cargando...</div>
-            ) : daysheetData?.data?.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                No hay datos. Importa un archivo DaySheet para comenzar.
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Fecha</TableHead>
-                    <TableHead>Cliente</TableHead>
-                    <TableHead>Teléfono</TableHead>
-                    <TableHead>Horario</TableHead>
-                    <TableHead>Estado</TableHead>
-                    <TableHead>Profesional</TableHead>
-                    <TableHead>Servicio</TableHead>
-                    <TableHead>Equipo</TableHead>
-                    <TableHead>Sucursal</TableHead>
-                    <TableHead className="text-right">Precio</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {daysheetData?.data?.map((row: any) => (
-                    <TableRow key={row.id}>
-                      <TableCell className="text-sm">{row.fecha}</TableCell>
-                      <TableCell className="font-medium">{row.cliente}</TableCell>
-                      <TableCell className="text-sm">{row.telefono}</TableCell>
-                      <TableCell className="text-sm">{row.horario}</TableCell>
-                      <TableCell>
-                        <span className={`px-2 py-1 rounded text-xs ${
-                          row.estado === 'Completed' ? 'bg-green-100 text-green-800' :
-                          row.estado === 'Cancelled' ? 'bg-red-100 text-red-800' :
-                          'bg-gray-100 text-gray-800'
-                        }`}>
-                          {row.estado}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-sm">{row.profesional}</TableCell>
-                      <TableCell className="text-sm">{row.servicio}</TableCell>
-                      <TableCell className="text-sm">{row.equipo}</TableCell>
-                      <TableCell className="text-sm">{row.sucursal}</TableCell>
-                      <TableCell className="text-right font-medium">
-                        ${row.precio_mxn?.toFixed(2)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
+            <div className="text-2xl font-bold">{currency(summary.totalIngresos)}</div>
           </CardContent>
         </Card>
       </div>
-    </AppLayout>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Citas del día</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="text-center py-8">Cargando...</div>
+          ) : !data?.length ? (
+            <div className="text-center py-8 text-muted-foreground">No hay citas para la fecha seleccionada.</div>
+          ) : (
+            <>
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Hora</TableHead>
+                      <TableHead>Cliente</TableHead>
+                      <TableHead>Servicio</TableHead>
+                      <TableHead>Empleado</TableHead>
+                      <TableHead>Duración</TableHead>
+                      <TableHead className="text-right">Precio</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.map((row) => (
+                      <TableRow key={row.id}>
+                        <TableCell className="font-medium">{row.hora}</TableCell>
+                        <TableCell>{row.cliente}</TableCell>
+                        <TableCell>{row.servicio}</TableCell>
+                        <TableCell>{row.empleado}</TableCell>
+                        <TableCell>{row.duracion ? `${row.duracion} min` : "—"}</TableCell>
+                        <TableCell className="text-right font-medium">{currency(row.precio)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="mt-4 rounded-md border bg-muted/30 p-4 flex flex-col gap-1 text-sm md:text-base md:flex-row md:justify-end md:gap-8">
+                <div>
+                  <span className="text-muted-foreground">Total de citas:</span>{" "}
+                  <span className="font-semibold">{summary.totalCitas}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Total de ingresos:</span>{" "}
+                  <span className="font-semibold">{currency(summary.totalIngresos)}</span>
+                </div>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 };
 
