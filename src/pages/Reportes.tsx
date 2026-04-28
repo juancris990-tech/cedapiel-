@@ -1,766 +1,825 @@
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import {
+  addDays,
+  endOfMonth,
+  format,
+  startOfDay,
+  startOfMonth,
+  subDays,
+  subMonths,
+} from "date-fns";
+import { es } from "date-fns/locale";
+import {
+  Calendar,
+  CalendarX,
+  DollarSign,
+  TrendingUp,
+  Users,
+} from "lucide-react";
+
 import { supabase } from "@/integrations/supabase/client";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
-import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { format, startOfMonth, endOfMonth, subDays, startOfYear, endOfYear, subMonths, subYears } from "date-fns";
-import { es } from "date-fns/locale";
-import { CalendarIcon, TrendingUp, TrendingDown, Users, Calendar as CalendarIconLucide, DollarSign, RefreshCw, Download } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-type PresetType = "mes" | "30dias" | "anio" | "personalizado";
+type AgendaWithRelations = {
+  id: number;
+  fecha: string;
+  hora_inicio: string;
+  hora_fin: string;
+  estado: string | null;
+  motivo_cancelacion: string | null;
+  id_cliente: number;
+  id_empleado: number | null;
+  id_servicio: number | null;
+  clientes: { nombre: string | null; apellidos: string | null } | null;
+  empleados: { nombre: string | null; apellidos: string | null } | null;
+  servicios: { nombre: string | null; precio: number | null } | null;
+};
+
+type VentaRow = {
+  id: number;
+  id_cita: number | null;
+  fecha: string;
+  estado_venta: string;
+  total: number;
+  monto_final_mxn: number | null;
+};
+
+type ClienteAlta = {
+  id: number;
+  fecha_alta: string | null;
+};
+
+const COMPLETADAS = new Set(["finalizada", "asistida", "completada", "completed"]);
+const CANCELADAS = new Set(["cancelada", "cancelada_cliente", "cancelada_clinica", "cancelled"]);
+const NO_SHOWS = new Set(["no_show", "no_asiste", "did_not_show", "didnotshow", "no-show"]);
+
+const normalizeEstado = (estado?: string | null) => (estado || "").toLowerCase().trim();
+
+const currency = (value: number) =>
+  new Intl.NumberFormat("es-CL", {
+    style: "currency",
+    currency: "CLP",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(value || 0);
+
+const percent = (value: number) => `${value.toFixed(1)}%`;
+
+const fullName = (person?: { nombre: string | null; apellidos: string | null } | null, fallback = "—") => {
+  const name = `${person?.nombre || ""} ${person?.apellidos || ""}`.trim();
+  return name || fallback;
+};
+
+const parseSafeDate = (value: string) => {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
 
 const Reportes = () => {
-  const [preset, setPreset] = useState<PresetType>("mes");
-  const [selectedSucursal, setSelectedSucursal] = useState<string>("todas");
-  const [selectedEmpleado, setSelectedEmpleado] = useState<string>("todos");
-  const [dateFrom, setDateFrom] = useState<Date | undefined>(startOfMonth(new Date()));
-  const [dateTo, setDateTo] = useState<Date | undefined>(endOfMonth(new Date()));
+  const [noShowRange, setNoShowRange] = useState<"30" | "60" | "90">("30");
 
-  // Calcular fechas según preset
-  const handlePresetChange = (value: PresetType) => {
-    setPreset(value);
-    const today = new Date();
-    switch (value) {
-      case "mes":
-        setDateFrom(startOfMonth(today));
-        setDateTo(endOfMonth(today));
-        break;
-      case "30dias":
-        setDateFrom(subDays(today, 30));
-        setDateTo(today);
-        break;
-      case "anio":
-        setDateFrom(startOfYear(today));
-        setDateTo(endOfYear(today));
-        break;
-    }
-  };
+  const today = new Date();
+  const todayStr = format(today, "yyyy-MM-dd");
+  const currentMonthStart = format(startOfMonth(today), "yyyy-MM-dd");
+  const currentMonthEnd = format(endOfMonth(today), "yyyy-MM-dd");
+  const previousMonthDate = subMonths(today, 1);
+  const previousMonthStart = format(startOfMonth(previousMonthDate), "yyyy-MM-dd");
+  const previousMonthEnd = format(endOfMonth(previousMonthDate), "yyyy-MM-dd");
+  const ninetyDaysAgo = format(subDays(today, 90), "yyyy-MM-dd");
+  const thirtyDaysAgo = format(subDays(today, 30), "yyyy-MM-dd");
 
-  // Obtener sucursales únicas desde los datos importados
-  const { data: sucursalesData } = useQuery({
-    queryKey: ["sucursales-reporte"],
+  const agendaSelect = `
+    id,
+    fecha,
+    hora_inicio,
+    hora_fin,
+    estado,
+    motivo_cancelacion,
+    id_cliente,
+    id_empleado,
+    id_servicio,
+    clientes:clientes!agendas_id_cliente_fkey(nombre, apellidos),
+    empleados:empleados!agendas_id_empleado_fkey(nombre, apellidos),
+    servicios:servicios!agendas_id_servicio_fkey(nombre, precio)
+  `;
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["reportes-gettimely", noShowRange],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("daysheet_citas")
-        .select("sucursal");
-      if (error) throw error;
-      
-      // Extraer sucursales únicas
-      const sucursalesUnicas = Array.from(new Set(
-        data.map(d => d.sucursal).filter(Boolean)
-      )).sort();
-      
-      return sucursalesUnicas.map((nombre, index) => ({
-        id: index + 1,
-        nombre
-      }));
-    },
-  });
+      const noShowStart = format(subDays(today, Number(noShowRange)), "yyyy-MM-dd");
 
-  // Obtener profesionales únicos desde los datos importados
-  const { data: profesionalesData } = useQuery({
-    queryKey: ["profesionales-reporte"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("daysheet_citas")
-        .select("profesional");
-      if (error) throw error;
-      
-      // Extraer profesionales únicos
-      const profesionalesUnicos = Array.from(new Set(
-        data.map(d => d.profesional).filter(Boolean)
-      )).sort();
-      
-      return profesionalesUnicos.map((nombre, index) => ({
-        id: index + 1,
-        nombre
-      }));
-    },
-  });
+      const [
+        daySheetRes,
+        noShowRes,
+        retentionRes,
+        canceladasRes,
+        agendasMonthRes,
+        ventasMonthRes,
+        ventasResumenRes,
+        agendasResumenRes,
+        clientesResumenRes,
+      ] = await Promise.all([
+        supabase
+          .from("agendas")
+          .select(agendaSelect)
+          .gte("fecha", todayStr)
+          .lte("fecha", todayStr)
+          .order("hora_inicio", { ascending: true }),
+        supabase
+          .from("agendas")
+          .select(agendaSelect)
+          .gte("fecha", noShowStart)
+          .lte("fecha", todayStr)
+          .order("fecha", { ascending: false }),
+        supabase
+          .from("agendas")
+          .select(agendaSelect)
+          .gte("fecha", ninetyDaysAgo)
+          .lte("fecha", todayStr),
+        supabase
+          .from("agendas")
+          .select(agendaSelect)
+          .gte("fecha", thirtyDaysAgo)
+          .lte("fecha", todayStr)
+          .order("fecha", { ascending: false }),
+        supabase
+          .from("agendas")
+          .select(agendaSelect)
+          .gte("fecha", currentMonthStart)
+          .lte("fecha", currentMonthEnd),
+        supabase
+          .from("ventas")
+          .select("id, id_cita, fecha, estado_venta, total, monto_final_mxn")
+          .gte("fecha", currentMonthStart)
+          .lte("fecha", currentMonthEnd),
+        supabase
+          .from("ventas")
+          .select("id, id_cita, fecha, estado_venta, total, monto_final_mxn")
+          .gte("fecha", previousMonthStart)
+          .lte("fecha", currentMonthEnd),
+        supabase
+          .from("agendas")
+          .select("id, fecha, estado")
+          .gte("fecha", previousMonthStart)
+          .lte("fecha", currentMonthEnd),
+        supabase
+          .from("clientes")
+          .select("id, fecha_alta")
+          .gte("fecha_alta", previousMonthStart)
+          .lte("fecha_alta", currentMonthEnd),
+      ]);
 
-  // Fetch clientes reporte (importado)
-  const { data: clientesReporte, isLoading: loadingClientes } = useQuery({
-    queryKey: ["clientes-reporte"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("clientes_reporte")
-        .select("*");
-      if (error) throw error;
-      return data;
-    },
-  });
+      const allResponses = [
+        daySheetRes,
+        noShowRes,
+        retentionRes,
+        canceladasRes,
+        agendasMonthRes,
+        ventasMonthRes,
+        ventasResumenRes,
+        agendasResumenRes,
+        clientesResumenRes,
+      ];
 
-  // Fetch citas agendadas (importado) - SIN filtro de fecha (datos estáticos CSV)
-  const { data: citasAgendadas, isLoading: loadingCitasAgendadas } = useQuery({
-    queryKey: ["citas-agendadas-reporte"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("citas_agendadas")
-        .select("*");
-      if (error) throw error;
-      return data;
-    },
-  });
-
-  // Fetch daysheet (citas completadas) - SIN filtro de fecha (datos estáticos CSV)
-  const { data: daysheetCitas } = useQuery({
-    queryKey: ["daysheet-citas"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("daysheet_citas")
-        .select("*");
-      if (error) throw error;
-      return data;
-    },
-  });
-
-  // Fetch citas canceladas (importado) - SIN filtro de fecha (datos estáticos CSV)
-  const { data: citasCanceladas } = useQuery({
-    queryKey: ["citas-canceladas-reporte"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("citas_canceladas")
-        .select("*");
-      if (error) throw error;
-      return data;
-    },
-  });
-
-  // Fetch clientes inactivos (para retención)
-  const { data: clientesInactivos } = useQuery({
-    queryKey: ["clientes-inactivos"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("clientes_inactivos")
-        .select("*");
-      if (error) throw error;
-      return data;
-    },
-  });
-
-  // Fetch gasto clientes (para ventas)
-  const { data: gastoClientes } = useQuery({
-    queryKey: ["gasto-clientes"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("gasto_clientes_periodo")
-        .select("*");
-      if (error) throw error;
-      return data;
-    },
-  });
-
-  // Fetch resumen ejecutivo desde la vista
-  const { data: resumenEjecutivo } = useQuery({
-    queryKey: ["resumen-ejecutivo", selectedSucursal],
-    queryFn: async () => {
-      let query = (supabase as any).from("vw_resumen_ejecutivo").select("*");
-      
-      if (selectedSucursal !== "todas") {
-        query = query.eq("id_sucursal", parseInt(selectedSucursal));
+      const firstError = allResponses.find((res) => res.error)?.error;
+      if (firstError) {
+        throw firstError;
       }
 
-      const { data, error } = await query;
-      if (error) throw error;
-      return data;
-    },
-  });
+      const daySheet = (daySheetRes.data || []) as AgendaWithRelations[];
+      const noShowCandidates = (noShowRes.data || []) as AgendaWithRelations[];
+      const retentionAgendas = (retentionRes.data || []) as AgendaWithRelations[];
+      const canceladasCandidates = (canceladasRes.data || []) as AgendaWithRelations[];
+      const agendasMes = (agendasMonthRes.data || []) as AgendaWithRelations[];
+      const ventasMes = (ventasMonthRes.data || []) as VentaRow[];
+      const ventasResumen = (ventasResumenRes.data || []) as VentaRow[];
+      const agendasResumen = (agendasResumenRes.data || []) as Array<{ id: number; fecha: string; estado: string | null }>;
+      const clientesResumen = (clientesResumenRes.data || []) as ClienteAlta[];
 
-  // Fetch operación clínica desde la vista
-  const { data: operacionClinica } = useQuery({
-    queryKey: ["operacion-clinica", selectedSucursal],
-    queryFn: async () => {
-      let query = (supabase as any).from("vw_operacion_clinica").select("*");
-      
-      if (selectedSucursal !== "todas") {
-        query = query.eq("id_sucursal", parseInt(selectedSucursal));
-      }
+      const daySheetIds = daySheet.map((row) => row.id);
+      const ventasHoyMap = new Map<number, number>();
+      if (daySheetIds.length > 0) {
+        const { data: ventasHoy, error: ventasHoyError } = await supabase
+          .from("ventas")
+          .select("id_cita, total, monto_final_mxn, estado_venta")
+          .in("id_cita", daySheetIds)
+          .eq("estado_venta", "cerrada");
 
-      const { data, error } = await query;
-      if (error) throw error;
-      return data;
-    },
-  });
+        if (ventasHoyError) throw ventasHoyError;
 
-  // Fetch facturación detalle (importado) - SIN filtro de fecha (datos estáticos Excel)
-  const { data: facturacionDetalle, isLoading: loadingVentas } = useQuery({
-    queryKey: ["facturacion-detalle"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("facturacion_detalle")
-        .select("*");
-      if (error) throw error;
-      return data;
-    },
-  });
-
-  // Fetch proyección valor futuro
-  const { data: proyeccionFuturo } = useQuery({
-    queryKey: ["proyeccion-futuro"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("proyeccion_valor_futuro")
-        .select("*");
-      if (error) throw error;
-      return data;
-    },
-  });
-
-
-  // 🔧 Calcular KPIs usando EXCLUSIVAMENTE datos importados
-  const kpis = useMemo(() => {
-    if (!clientesReporte || !citasAgendadas || !daysheetCitas || !citasCanceladas || !facturacionDetalle) return null;
-
-    // Aplicar filtros a los datos
-    const daysheetFiltrado = daysheetCitas.filter(cita => {
-      if (selectedSucursal !== "todas" && cita.sucursal !== selectedSucursal) return false;
-      if (selectedEmpleado !== "todos" && cita.profesional !== selectedEmpleado) return false;
-      return true;
-    });
-
-    const citasAgendadasFiltradas = citasAgendadas.filter(cita => {
-      if (selectedSucursal !== "todas" && cita.sucursal !== selectedSucursal) return false;
-      if (selectedEmpleado !== "todos" && cita.profesional !== selectedEmpleado) return false;
-      return true;
-    });
-
-    const citasCanceladasFiltradas = citasCanceladas.filter(cita => {
-      if (selectedSucursal !== "todas" && cita.sucursal !== selectedSucursal) return false;
-      if (selectedEmpleado !== "todos" && cita.profesional !== selectedEmpleado) return false;
-      return true;
-    });
-
-    const facturacionFiltrada = facturacionDetalle.filter(item => {
-      if (selectedSucursal !== "todas" && item.sucursal !== selectedSucursal) return false;
-      if (selectedEmpleado !== "todos" && item.profesional !== selectedEmpleado) return false;
-      return true;
-    });
-
-    // 📊 1. CLIENTES TOTALES / NUEVOS
-    // 📄 Archivo: Reporte de clientes.csv → clientes_reporte
-    // Clientes Totales = número de filas
-    // Clientes Nuevos = filas con cantidad_citas = 1
-    const clientesTotales = clientesReporte.length;
-    const clientesNuevos = clientesReporte.filter(c => c.cantidad_citas === 1).length;
-    const pctNuevos = clientesTotales > 0 ? (clientesNuevos / clientesTotales * 100) : 0;
-
-    // 📅 2. TOTAL DE CITAS
-    // 📄 Archivos: 
-    //    - Reporte de citas (lo que está agendado).csv → citas filtradas
-    //    - Reporte DaySheet.csv → completadas filtradas
-    //    - Reporte citas canceladas.csv → canceladas filtradas
-    
-    const citasFuturas = citasAgendadasFiltradas.length;
-    const citasCompletadas = daysheetFiltrado.filter(c => 
-      c.estado?.toLowerCase() === 'completed'
-    ).length;
-    const canceladas = citasCanceladasFiltradas.length;
-    
-    const totalCitas = citasFuturas + citasCompletadas + canceladas;
-
-    // 🛠️ 3. SERVICIOS REALIZADOS
-    // 📄 Archivo: Reporte DaySheet.csv → daysheet_citas completadas
-    const serviciosRealizados = citasCompletadas;
-
-    // 🚫 8. NO-SHOW RATE
-    // 📄 Archivo: Reporte citas canceladas.csv → citas_canceladas
-    const noShows = citasCanceladasFiltradas.length;
-    const noShowRate = totalCitas > 0 ? (noShows / totalCitas * 100) : 0;
-
-    // 💵 4. FACTURACIÓN TOTAL / TICKET PROMEDIO
-    // 📄 Archivo: Detalles de facturación.xlsx → facturacion_detalle
-    const facturacionTotal = facturacionFiltrada.reduce((sum, item) => 
-      sum + (Number(item.monto_mxn) || 0), 0
-    );
-    
-    const ticketPromedio = serviciosRealizados > 0 
-      ? facturacionTotal / serviciosRealizados 
-      : 0;
-
-    // Separar facturación por tipo (usando monto_mxn)
-    const facturacionServicios = facturacionFiltrada
-      .filter(item => {
-        const tipo = (item.tipo || '').toLowerCase();
-        return tipo.includes('service') || tipo.includes('servic') || tipo.includes('appointment');
-      })
-      .reduce((sum, item) => sum + (Number(item.monto_mxn) || 0), 0);
-    
-    const facturacionProductos = facturacionFiltrada
-      .filter(item => {
-        const tipo = (item.tipo || '').toLowerCase();
-        return tipo.includes('product') || tipo.includes('produc');
-      })
-      .reduce((sum, item) => sum + (Number(item.monto_mxn) || 0), 0);
-
-    // ♻ 5. % RETENCIÓN
-    // 📄 Archivos: 
-    //    - Reporte de clientes.csv → clientes_reporte
-    const clientesRecurrentes = clientesReporte.filter(c => 
-      (c.cantidad_citas || 0) > 1
-    ).length;
-    const pctRetencion = clientesTotales > 0 
-      ? (clientesRecurrentes / clientesTotales * 100) 
-      : 0;
-
-    // 🔄 6. % REAGENDAN
-    // 📄 Archivo: Reporte de citas (lo que está agendado).csv → citas_agendadas
-    const citasPorCliente: { [key: string]: number } = {};
-    citasAgendadasFiltradas.forEach(cita => {
-      const cliente = cita.cliente?.toLowerCase().trim() || '';
-      if (cliente) {
-        citasPorCliente[cliente] = (citasPorCliente[cliente] || 0) + 1;
-      }
-    });
-    
-    const clientesReagendan = Object.values(citasPorCliente).filter(numCitas => numCitas >= 2).length;
-    const totalClientesConCita = Object.keys(citasPorCliente).length;
-    const pctReagendan = totalClientesConCita > 0 
-      ? (clientesReagendan / totalClientesConCita * 100) 
-      : 0;
-
-    // ⏳ 7. TIEMPO ENTRE VISITAS
-    // 📄 Archivo: Reporte DaySheet.csv → daysheet_citas (ordenar por fecha)
-    const clientesFechas: { [key: string]: Date[] } = {};
-    
-    daysheetFiltrado.forEach(cita => {
-      if (cita.estado?.toLowerCase() === 'completed' && cita.cliente) {
-        const cliente = cita.cliente.toLowerCase().trim();
-        const fecha = new Date(cita.fecha);
-        if (!isNaN(fecha.getTime())) {
-          if (!clientesFechas[cliente]) {
-            clientesFechas[cliente] = [];
+        (ventasHoy || []).forEach((venta) => {
+          if (venta.id_cita) {
+            const amount = Number(venta.monto_final_mxn ?? venta.total ?? 0);
+            ventasHoyMap.set(venta.id_cita, amount);
           }
-          clientesFechas[cliente].push(fecha);
-        }
+        });
       }
-    });
-    
-    let totalDiasEntreVisitas = 0;
-    let contadorDiferencias = 0;
-    
-    Object.values(clientesFechas).forEach(fechas => {
-      if (fechas.length > 1) {
-        fechas.sort((a, b) => a.getTime() - b.getTime());
-        for (let i = 1; i < fechas.length; i++) {
-          const dias = (fechas[i].getTime() - fechas[i-1].getTime()) / (1000 * 60 * 60 * 24);
-          totalDiasEntreVisitas += dias;
-          contadorDiferencias++;
-        }
-      }
-    });
-    
-    const tiempoPromedioDias = contadorDiferencias > 0 
-      ? totalDiasEntreVisitas / contadorDiferencias 
-      : 0;
 
-    // 💰 9. VALOR FUTURO
-    // 📄 Archivo: Reporte Valor futuro (ventas de lo que está agendado).csv → proyeccion_valor_futuro
-    const valorFuturo = proyeccionFuturo?.reduce((sum, p) => 
-      sum + (Number(p.valor_futuro_mxn) || 0), 0
-    ) || 0;
+      return {
+        daySheet,
+        noShowCandidates,
+        retentionAgendas,
+        canceladasCandidates,
+        agendasMes,
+        ventasMes,
+        ventasResumen,
+        agendasResumen,
+        clientesResumen,
+        ventasHoyMap,
+      };
+    },
+  });
+
+  const reports = useMemo(() => {
+    if (!data) {
+      return null;
+    }
+
+    const daySheetRows = data.daySheet.map((item) => {
+      const servicioPrecio = Number(item.servicios?.precio || 0);
+      const ventaPrecio = data.ventasHoyMap.get(item.id) || 0;
+      const precio = ventaPrecio || servicioPrecio;
+      return {
+        id: item.id,
+        hora: `${item.hora_inicio || ""}${item.hora_fin ? ` - ${item.hora_fin}` : ""}`,
+        cliente: fullName(item.clientes),
+        servicio: item.servicios?.nombre || "—",
+        empleado: fullName(item.empleados),
+        estado: item.estado || "—",
+        precio,
+      };
+    });
+
+    const noShowRowsBase = data.noShowCandidates.filter((item) =>
+      NO_SHOWS.has(normalizeEstado(item.estado))
+    );
+
+    const noShowsByClient = noShowRowsBase.reduce<Record<number, number>>((acc, item) => {
+      acc[item.id_cliente] = (acc[item.id_cliente] || 0) + 1;
+      return acc;
+    }, {});
+
+    const noShowRows = noShowRowsBase.map((item) => ({
+      id: item.id,
+      fecha: item.fecha,
+      hora: item.hora_inicio,
+      cliente: fullName(item.clientes),
+      servicio: item.servicios?.nombre || "—",
+      empleado: fullName(item.empleados),
+      reincidente: (noShowsByClient[item.id_cliente] || 0) >= 2,
+      totalNoShowsCliente: noShowsByClient[item.id_cliente] || 0,
+    }));
+
+    const completed90 = data.retentionAgendas.filter((item) =>
+      COMPLETADAS.has(normalizeEstado(item.estado))
+    );
+
+    const now = new Date();
+    const startLast30 = startOfDay(subDays(now, 30));
+    const start60 = startOfDay(subDays(now, 60));
+    const start90 = startOfDay(subDays(now, 90));
+    const end90Window = startOfDay(subDays(now, 60));
+
+    const recentClients = new Set<number>();
+    const baseRetentionClients = new Set<number>();
+    const clients60to90 = new Map<
+      number,
+      { idCliente: number; cliente: string; ultimaVisita: string; servicio: string; empleado: string }
+    >();
+
+    completed90.forEach((item) => {
+      const d = parseSafeDate(item.fecha);
+      if (!d) return;
+
+      if (d >= startLast30) {
+        recentClients.add(item.id_cliente);
+      }
+      if (d >= start90 && d < startLast30) {
+        baseRetentionClients.add(item.id_cliente);
+      }
+      if (d >= start90 && d < end90Window) {
+        const existing = clients60to90.get(item.id_cliente);
+        if (!existing || item.fecha > existing.ultimaVisita) {
+          clients60to90.set(item.id_cliente, {
+            idCliente: item.id_cliente,
+            cliente: fullName(item.clientes),
+            ultimaVisita: item.fecha,
+            servicio: item.servicios?.nombre || "—",
+            empleado: fullName(item.empleados),
+          });
+        }
+      }
+    });
+
+    const retainedCount = [...baseRetentionClients].filter((id) => recentClients.has(id)).length;
+    const retentionRate = baseRetentionClients.size > 0 ? (retainedCount / baseRetentionClients.size) * 100 : 0;
+
+    const clientesPorRecuperar = [...clients60to90.values()]
+      .filter((row) => !recentClients.has(row.idCliente))
+      .sort((a, b) => (a.ultimaVisita < b.ultimaVisita ? -1 : 1));
+
+    const citasCompletadasMes = data.agendasMes.filter((item) =>
+      COMPLETADAS.has(normalizeEstado(item.estado))
+    );
+    const ventasCerradasMes = data.ventasMes.filter(
+      (row) => normalizeEstado(row.estado_venta) === "cerrada"
+    );
+
+    const agendaById = new Map<number, AgendaWithRelations>();
+    data.agendasMes.forEach((item) => {
+      agendaById.set(item.id, item);
+    });
+
+    const ingresosPorEmpleadoMap = new Map<string, { empleado: string; ingresos: number; citas: number }>();
+
+    citasCompletadasMes.forEach((cita) => {
+      const empleado = fullName(cita.empleados, "Sin asignar");
+      const current = ingresosPorEmpleadoMap.get(empleado) || { empleado, ingresos: 0, citas: 0 };
+      current.citas += 1;
+      ingresosPorEmpleadoMap.set(empleado, current);
+    });
+
+    ventasCerradasMes.forEach((venta) => {
+      const agenda = venta.id_cita ? agendaById.get(venta.id_cita) : undefined;
+      const empleado = fullName(agenda?.empleados, "Sin asignar");
+      const current = ingresosPorEmpleadoMap.get(empleado) || { empleado, ingresos: 0, citas: 0 };
+      current.ingresos += Number(venta.monto_final_mxn ?? venta.total ?? 0);
+      ingresosPorEmpleadoMap.set(empleado, current);
+    });
+
+    const ingresosPorEmpleado = [...ingresosPorEmpleadoMap.values()].sort((a, b) => b.ingresos - a.ingresos);
+    const totalIngresosMes = ingresosPorEmpleado.reduce((sum, row) => sum + row.ingresos, 0);
+
+    const canceladas30 = data.canceladasCandidates
+      .filter((item) => {
+        const estado = normalizeEstado(item.estado);
+        return CANCELADAS.has(estado) || NO_SHOWS.has(estado);
+      })
+      .map((item) => ({
+        id: item.id,
+        fecha: item.fecha,
+        cliente: fullName(item.clientes),
+        empleado: fullName(item.empleados),
+        servicio: item.servicios?.nombre || "—",
+        estado: item.estado || "—",
+        motivo: item.motivo_cancelacion || "Sin motivo registrado",
+      }));
+
+    const ingresosActual = data.ventasResumen
+      .filter(
+        (row) =>
+          normalizeEstado(row.estado_venta) === "cerrada" &&
+          row.fecha >= currentMonthStart &&
+          row.fecha <= currentMonthEnd
+      )
+      .reduce((sum, row) => sum + Number(row.monto_final_mxn ?? row.total ?? 0), 0);
+
+    const ingresosPrevio = data.ventasResumen
+      .filter(
+        (row) =>
+          normalizeEstado(row.estado_venta) === "cerrada" &&
+          row.fecha >= previousMonthStart &&
+          row.fecha <= previousMonthEnd
+      )
+      .reduce((sum, row) => sum + Number(row.monto_final_mxn ?? row.total ?? 0), 0);
+
+    const citasCompletadasActual = data.agendasResumen.filter(
+      (row) =>
+        row.fecha >= currentMonthStart &&
+        row.fecha <= currentMonthEnd &&
+        COMPLETADAS.has(normalizeEstado(row.estado))
+    ).length;
+    const citasCompletadasPrevio = data.agendasResumen.filter(
+      (row) =>
+        row.fecha >= previousMonthStart &&
+        row.fecha <= previousMonthEnd &&
+        COMPLETADAS.has(normalizeEstado(row.estado))
+    ).length;
+
+    const noShowsActual = data.agendasResumen.filter(
+      (row) =>
+        row.fecha >= currentMonthStart &&
+        row.fecha <= currentMonthEnd &&
+        NO_SHOWS.has(normalizeEstado(row.estado))
+    ).length;
+    const noShowsPrevio = data.agendasResumen.filter(
+      (row) =>
+        row.fecha >= previousMonthStart &&
+        row.fecha <= previousMonthEnd &&
+        NO_SHOWS.has(normalizeEstado(row.estado))
+    ).length;
+
+    const clientesNuevosActual = data.clientesResumen.filter((row) => {
+      if (!row.fecha_alta) return false;
+      return row.fecha_alta >= currentMonthStart && row.fecha_alta <= currentMonthEnd;
+    }).length;
+
+    const clientesNuevosPrevio = data.clientesResumen.filter((row) => {
+      if (!row.fecha_alta) return false;
+      return row.fecha_alta >= previousMonthStart && row.fecha_alta <= previousMonthEnd;
+    }).length;
+
+    const delta = (actual: number, previo: number) => {
+      if (previo === 0) return actual === 0 ? 0 : 100;
+      return ((actual - previo) / previo) * 100;
+    };
 
     return {
-      clientesTotales,
-      clientesNuevos,
-      pctNuevos: pctNuevos.toFixed(2),
-      totalCitas,
-      serviciosRealizados,
-      noShows,
-      noShowRate: noShowRate.toFixed(2),
-      pctRetencion: pctRetencion.toFixed(2),
-      pctReagendan: pctReagendan.toFixed(2),
-      tiempoPromedioDias: tiempoPromedioDias.toFixed(1),
-      ticketPromedio: ticketPromedio.toFixed(2),
-      facturacionTotal: facturacionTotal.toFixed(2),
-      facturacionServicios: facturacionServicios.toFixed(2),
-      facturacionProductos: facturacionProductos.toFixed(2),
-      valorFuturo: valorFuturo.toFixed(2),
-      citasFuturas,
-      canceladas,
+      daySheetRows,
+      noShowRows,
+      retention: {
+        retentionRate,
+        clientesActivos: recentClients.size,
+        clientesPorRecuperar,
+      },
+      ingresosPorEmpleado,
+      totalIngresosMes,
+      canceladas30,
+      resumenMensual: {
+        ingresos: {
+          actual: ingresosActual,
+          previo: ingresosPrevio,
+          delta: delta(ingresosActual, ingresosPrevio),
+        },
+        citasCompletadas: {
+          actual: citasCompletadasActual,
+          previo: citasCompletadasPrevio,
+          delta: delta(citasCompletadasActual, citasCompletadasPrevio),
+        },
+        clientesNuevos: {
+          actual: clientesNuevosActual,
+          previo: clientesNuevosPrevio,
+          delta: delta(clientesNuevosActual, clientesNuevosPrevio),
+        },
+        noShows: {
+          actual: noShowsActual,
+          previo: noShowsPrevio,
+          delta: delta(noShowsActual, noShowsPrevio),
+        },
+      },
     };
   }, [
-    clientesReporte, 
-    citasAgendadas, 
-    daysheetCitas, 
-    citasCanceladas,
-    facturacionDetalle, 
-    clientesInactivos,
-    gastoClientes,
-    proyeccionFuturo,
-    selectedSucursal,
-    selectedEmpleado,
-    dateFrom, 
-    dateTo
+    currentMonthEnd,
+    currentMonthStart,
+    data,
+    previousMonthEnd,
+    previousMonthStart,
   ]);
-
-  const isLoading = loadingClientes || loadingCitasAgendadas || loadingVentas;
 
   return (
     <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Reportes / Resumen Ejecutivo</h1>
-          <p className="text-muted-foreground">Análisis de rendimiento y métricas clave</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" asChild>
-            <a href="/reportes/descuentos" className="flex items-center gap-2">
-              <TrendingDown className="h-4 w-4" />
-              Descuentos
-            </a>
-          </Button>
-          <Button variant="outline" asChild>
-            <a href="/reportes/diferidos" className="flex items-center gap-2">
-              <DollarSign className="h-4 w-4" />
-              Diferidos
-            </a>
-          </Button>
-          <Button variant="outline" asChild>
-            <a href="/reportes/ingresos" className="flex items-center gap-2">
-              <TrendingUp className="h-4 w-4" />
-              Ingresos
-            </a>
-          </Button>
-        </div>
+      <div className="flex flex-col gap-2">
+        <h1 className="text-3xl font-bold tracking-tight">Reportes</h1>
+        <p className="text-muted-foreground">
+          Vista operativa estilo GetTimely con datos reales desde Supabase.
+        </p>
       </div>
 
-      {/* Filtros */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Filtros</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Sucursal</label>
-              <Select value={selectedSucursal} onValueChange={setSelectedSucursal}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="todas">Todas las sucursales</SelectItem>
-                  {sucursalesData?.map((s) => (
-                    <SelectItem key={s.id} value={s.nombre}>
-                      {s.nombre}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+      <Tabs defaultValue="hoja-dia" className="space-y-4">
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+          <TabsTrigger value="hoja-dia">Hoja del día</TabsTrigger>
+          <TabsTrigger value="no-shows">No-shows</TabsTrigger>
+          <TabsTrigger value="retencion">Retención</TabsTrigger>
+          <TabsTrigger value="ingresos-empleado">Ingresos por empleado</TabsTrigger>
+          <TabsTrigger value="canceladas">Citas canceladas</TabsTrigger>
+          <TabsTrigger value="resumen-mensual">Resumen mensual</TabsTrigger>
+        </TabsList>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Profesional</label>
-              <Select value={selectedEmpleado} onValueChange={setSelectedEmpleado}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="todos">Todos los profesionales</SelectItem>
-                  {profesionalesData?.map((p) => (
-                    <SelectItem key={p.id} value={p.nombre}>
-                      {p.nombre}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+        {isLoading && (
+          <Card>
+            <CardContent className="py-10 text-center text-muted-foreground">Cargando reportes...</CardContent>
+          </Card>
+        )}
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Período</label>
-              <Select value={preset} onValueChange={(v) => handlePresetChange(v as PresetType)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="mes">Mes en curso</SelectItem>
-                  <SelectItem value="30dias">Últimos 30 días</SelectItem>
-                  <SelectItem value="anio">Año en curso</SelectItem>
-                  <SelectItem value="personalizado">Personalizado</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+        {error && (
+          <Card>
+            <CardContent className="py-10 text-center text-destructive">
+              Error al cargar reportes: {(error as Error).message}
+            </CardContent>
+          </Card>
+        )}
 
-            <div className="flex items-end gap-2">
-              <Button variant="outline" size="icon">
-                <RefreshCw className="h-4 w-4" />
-              </Button>
-              <Button variant="outline" size="icon">
-                <Download className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
+        {!isLoading && !error && reports && (
+          <>
+            <TabsContent value="hoja-dia">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Hoja del día</CardTitle>
+                  <CardDescription>
+                    {format(today, "EEEE d 'de' MMMM, yyyy", { locale: es })}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Hora</TableHead>
+                        <TableHead>Cliente</TableHead>
+                        <TableHead>Servicio</TableHead>
+                        <TableHead>Empleado</TableHead>
+                        <TableHead>Estado</TableHead>
+                        <TableHead className="text-right">Precio</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {reports.daySheetRows.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center text-muted-foreground">
+                            No hay citas para hoy.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        reports.daySheetRows.map((row) => (
+                          <TableRow key={row.id}>
+                            <TableCell>{row.hora || "—"}</TableCell>
+                            <TableCell>{row.cliente}</TableCell>
+                            <TableCell>{row.servicio}</TableCell>
+                            <TableCell>{row.empleado}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{row.estado}</Badge>
+                            </TableCell>
+                            <TableCell className="text-right">{currency(row.precio)}</TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </TabsContent>
 
-          {preset === "personalizado" && (
-            <div className="flex gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Desde</label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className={cn("justify-start text-left font-normal", !dateFrom && "text-muted-foreground")}>
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {dateFrom ? format(dateFrom, "PPP", { locale: es }) : "Seleccionar"}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0">
-                    <Calendar mode="single" selected={dateFrom} onSelect={setDateFrom} initialFocus />
-                  </PopoverContent>
-                </Popover>
+            <TabsContent value="no-shows" className="space-y-4">
+              <Card>
+                <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <CardTitle>No-shows</CardTitle>
+                    <CardDescription>
+                      Clientes reincidentes (2+ no-shows) se muestran destacados.
+                    </CardDescription>
+                  </div>
+                  <div className="w-full md:w-48">
+                    <Select value={noShowRange} onValueChange={(value) => setNoShowRange(value as "30" | "60" | "90")}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Rango" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="30">Últimos 30 días</SelectItem>
+                        <SelectItem value="60">Últimos 60 días</SelectItem>
+                        <SelectItem value="90">Últimos 90 días</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Fecha</TableHead>
+                        <TableHead>Hora</TableHead>
+                        <TableHead>Cliente</TableHead>
+                        <TableHead>Servicio</TableHead>
+                        <TableHead>Empleado</TableHead>
+                        <TableHead>Frecuencia</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {reports.noShowRows.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center text-muted-foreground">
+                            No hay no-shows en este período.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        reports.noShowRows.map((row) => (
+                          <TableRow key={row.id} className={row.reincidente ? "bg-destructive/5" : ""}>
+                            <TableCell>{format(new Date(row.fecha), "dd/MM/yyyy")}</TableCell>
+                            <TableCell>{row.hora || "—"}</TableCell>
+                            <TableCell>{row.cliente}</TableCell>
+                            <TableCell>{row.servicio}</TableCell>
+                            <TableCell>{row.empleado}</TableCell>
+                            <TableCell>
+                              {row.reincidente ? (
+                                <Badge variant="destructive">Reincidente ({row.totalNoShowsCliente})</Badge>
+                              ) : (
+                                <Badge variant="secondary">{row.totalNoShowsCliente}</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="retencion" className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Tasa de retención</CardDescription>
+                    <CardTitle className="text-2xl">{percent(reports.retention.retentionRate)}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Clientes activos (últimos 30 días)</CardDescription>
+                    <CardTitle className="text-2xl">{reports.retention.clientesActivos}</CardTitle>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Clientes por recuperar</CardDescription>
+                    <CardTitle className="text-2xl">{reports.retention.clientesPorRecuperar.length}</CardTitle>
+                  </CardHeader>
+                </Card>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Hasta</label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className={cn("justify-start text-left font-normal", !dateTo && "text-muted-foreground")}>
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {dateTo ? format(dateTo, "PPP", { locale: es }) : "Seleccionar"}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0">
-                    <Calendar mode="single" selected={dateTo} onSelect={setDateTo} initialFocus />
-                  </PopoverContent>
-                </Popover>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Vinieron hace 60-90 días y no volvieron en 30 días</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Cliente</TableHead>
+                        <TableHead>Última visita</TableHead>
+                        <TableHead>Servicio</TableHead>
+                        <TableHead>Empleado</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {reports.retention.clientesPorRecuperar.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={4} className="text-center text-muted-foreground">
+                            No hay clientes para recuperar en este momento.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        reports.retention.clientesPorRecuperar.map((row) => (
+                          <TableRow key={row.idCliente}>
+                            <TableCell>{row.cliente}</TableCell>
+                            <TableCell>{format(new Date(row.ultimaVisita), "dd/MM/yyyy")}</TableCell>
+                            <TableCell>{row.servicio}</TableCell>
+                            <TableCell>{row.empleado}</TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="ingresos-empleado" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Ingresos por empleado</CardTitle>
+                  <CardDescription>Mes actual: ingresos y cantidad de citas completadas.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {reports.ingresosPorEmpleado.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No hay datos de ingresos este mes.</p>
+                  ) : (
+                    reports.ingresosPorEmpleado.map((row) => {
+                      const width = reports.totalIngresosMes > 0 ? (row.ingresos / reports.totalIngresosMes) * 100 : 0;
+                      return (
+                        <div key={row.empleado} className="space-y-1">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="font-medium">{row.empleado}</span>
+                            <span className="text-muted-foreground">
+                              {currency(row.ingresos)} · {row.citas} citas
+                            </span>
+                          </div>
+                          <div className="h-2 w-full rounded bg-muted">
+                            <div
+                              className="h-2 rounded bg-primary"
+                              style={{ width: `${Math.max(width, 2)}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="canceladas">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Citas canceladas (últimos 30 días)</CardTitle>
+                  <CardDescription>Incluye canceladas y no-shows con motivo registrado.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Fecha</TableHead>
+                        <TableHead>Cliente</TableHead>
+                        <TableHead>Servicio</TableHead>
+                        <TableHead>Empleado</TableHead>
+                        <TableHead>Estado</TableHead>
+                        <TableHead>Motivo</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {reports.canceladas30.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center text-muted-foreground">
+                            No hay citas canceladas para este período.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        reports.canceladas30.map((row) => (
+                          <TableRow key={row.id}>
+                            <TableCell>{format(new Date(row.fecha), "dd/MM/yyyy")}</TableCell>
+                            <TableCell>{row.cliente}</TableCell>
+                            <TableCell>{row.servicio}</TableCell>
+                            <TableCell>{row.empleado}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{row.estado}</Badge>
+                            </TableCell>
+                            <TableCell>{row.motivo}</TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="resumen-mensual">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <Card>
+                  <CardHeader className="space-y-1 pb-2">
+                    <CardDescription className="flex items-center gap-2">
+                      <DollarSign className="h-4 w-4" /> Ingresos
+                    </CardDescription>
+                    <CardTitle>{currency(reports.resumenMensual.ingresos.actual)}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm text-muted-foreground">
+                    Mes anterior: {currency(reports.resumenMensual.ingresos.previo)} ({percent(reports.resumenMensual.ingresos.delta)})
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="space-y-1 pb-2">
+                    <CardDescription className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4" /> Citas completadas
+                    </CardDescription>
+                    <CardTitle>{reports.resumenMensual.citasCompletadas.actual}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm text-muted-foreground">
+                    Mes anterior: {reports.resumenMensual.citasCompletadas.previo} ({percent(reports.resumenMensual.citasCompletadas.delta)})
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="space-y-1 pb-2">
+                    <CardDescription className="flex items-center gap-2">
+                      <Users className="h-4 w-4" /> Clientes nuevos
+                    </CardDescription>
+                    <CardTitle>{reports.resumenMensual.clientesNuevos.actual}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm text-muted-foreground">
+                    Mes anterior: {reports.resumenMensual.clientesNuevos.previo} ({percent(reports.resumenMensual.clientesNuevos.delta)})
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="space-y-1 pb-2">
+                    <CardDescription className="flex items-center gap-2">
+                      <CalendarX className="h-4 w-4" /> No-shows
+                    </CardDescription>
+                    <CardTitle>{reports.resumenMensual.noShows.actual}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm text-muted-foreground">
+                    Mes anterior: {reports.resumenMensual.noShows.previo} ({percent(reports.resumenMensual.noShows.delta)})
+                  </CardContent>
+                </Card>
               </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
-      {/* KPIs Cards */}
-      {isLoading ? (
-        <div className="text-center py-12">Cargando datos...</div>
-      ) : kpis ? (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Clientes Totales</CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{kpis.clientesTotales}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {kpis.clientesNuevos} nuevos
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total de Citas</CardTitle>
-                <CalendarIconLucide className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{kpis.totalCitas}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {kpis.citasFuturas} futuras, {kpis.serviciosRealizados} completadas, {kpis.canceladas} canceladas
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Servicios Realizados</CardTitle>
-                <CalendarIconLucide className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{kpis.serviciosRealizados}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {kpis.totalCitas > 0 ? ((kpis.serviciosRealizados / kpis.totalCitas) * 100).toFixed(1) : 0}% completadas
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Facturación Total</CardTitle>
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">${parseFloat(kpis.facturacionTotal).toLocaleString()}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Ticket promedio: ${parseFloat(kpis.ticketPromedio).toLocaleString()}
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">% Retención</CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{kpis.pctRetencion}%</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Clientes recurrentes
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">% Reagendan</CardTitle>
-                <RefreshCw className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{kpis.pctReagendan}%</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Con cita futura
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Tiempo Entre Visitas</CardTitle>
-                <CalendarIconLucide className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{kpis.tiempoPromedioDias}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  días promedio
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Clientes Nuevos</CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{kpis.clientesNuevos}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {kpis.clientesTotales > 0 ? ((kpis.clientesNuevos / kpis.clientesTotales) * 100).toFixed(1) : 0}% del total
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">No-show Rate</CardTitle>
-                <CalendarIconLucide className="h-4 w-4 text-destructive" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-destructive">{kpis.noShowRate}%</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {kpis.noShows} no-shows de {kpis.totalCitas} citas
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Gráficos */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Evolución de Citas</CardTitle>
-                <CardDescription>Comparativa mensual</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={[
-                    { tipo: "Futuras", cantidad: kpis.citasFuturas },
-                    { tipo: "Completadas", cantidad: kpis.serviciosRealizados },
-                    { tipo: "Canceladas", cantidad: kpis.canceladas },
-                    { tipo: "No-shows", cantidad: kpis.noShows },
-                  ]}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="tipo" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="cantidad" fill="hsl(var(--primary))" name="Citas" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Estado de Citas</CardTitle>
-                <CardDescription>Distribución por estado</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={[
-                        { name: "Completadas", value: kpis.serviciosRealizados },
-                        { name: "Otras", value: kpis.totalCitas - kpis.serviciosRealizados },
-                      ]}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={(entry) => `${entry.name}: ${entry.value}`}
-                      outerRadius={80}
-                      fill="hsl(var(--primary))"
-                      dataKey="value"
-                    >
-                      <Cell fill="hsl(var(--primary))" />
-                      <Cell fill="hsl(var(--muted))" />
-                    </Pie>
-                    <Tooltip />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Facturación por Categoría</CardTitle>
-                <CardDescription>Servicios vs Productos</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={[
-                    { categoria: "Servicios", monto: parseFloat(kpis.facturacionServicios) },
-                    { categoria: "Productos", monto: parseFloat(kpis.facturacionProductos) },
-                  ]}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="categoria" />
-                    <YAxis />
-                    <Tooltip formatter={(value) => `$${Number(value).toLocaleString()}`} />
-                    <Legend />
-                    <Bar dataKey="monto" fill="hsl(var(--chart-2))" name="Facturación" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Comparativo de Facturación</CardTitle>
-                <CardDescription>Período actual vs anteriores</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={[
-                    { periodo: "Año Anterior", facturacion: 0 },
-                    { periodo: "Mes Anterior", facturacion: 0 },
-                    { periodo: "Actual", facturacion: parseFloat(kpis.facturacionTotal) },
-                  ]}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="periodo" />
-                    <YAxis />
-                    <Tooltip formatter={(value) => `$${Number(value).toLocaleString()}`} />
-                    <Legend />
-                    <Line type="monotone" dataKey="facturacion" stroke="hsl(var(--chart-1))" name="Facturación" strokeWidth={2} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
-        </>
-      ) : (
-        <div className="text-center py-12 text-muted-foreground">No hay datos disponibles</div>
-      )}
+              <Card className="mt-4">
+                <CardHeader>
+                  <CardTitle>Período comparado</CardTitle>
+                  <CardDescription>
+                    {format(startOfMonth(today), "dd/MM/yyyy")} al {format(endOfMonth(today), "dd/MM/yyyy")} vs {" "}
+                    {format(startOfMonth(subMonths(today, 1)), "dd/MM/yyyy")} al {format(endOfMonth(subMonths(today, 1)), "dd/MM/yyyy")}
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            </TabsContent>
+          </>
+        )}
+      </Tabs>
     </div>
   );
 };
