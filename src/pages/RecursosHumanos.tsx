@@ -1,9 +1,13 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Users, DollarSign, CheckCircle2, TrendingUp } from "lucide-react";
+import { Award, CheckCircle2, Trophy, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import AppLayout from "@/components/layout/AppLayout";
 import EmpleadoContratoCard from "@/components/rrhh/EmpleadoContratoCard";
@@ -16,6 +20,31 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function RecursosHumanos() {
   const [activeTab, setActiveTab] = useState("contratos");
+  const [busquedaEmpleado, setBusquedaEmpleado] = useState("");
+
+  const now = new Date();
+  const inicioMes = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
+  const finMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
+
+  const ESTADOS_COMPLETADOS = new Set(["asistida", "finalizada", "completada", "completed"]);
+  const normalizeEstado = (estado?: string | null) => (estado || "").toLowerCase().trim();
+  const formatCurrency = (value: number) =>
+    new Intl.NumberFormat("es-CL", {
+      style: "currency",
+      currency: "CLP",
+      maximumFractionDigits: 0,
+    }).format(value || 0);
+
+  const initials = (nombre?: string | null, apellidos?: string | null) => {
+    const full = `${nombre || ""} ${apellidos || ""}`.trim();
+    if (!full) return "--";
+    const parts = full.split(/\s+/).filter(Boolean);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+  };
+
+  const fullName = (nombre?: string | null, apellidos?: string | null) =>
+    `${nombre || ""} ${apellidos || ""}`.trim() || "Sin nombre";
 
   const { data: empleados, isLoading } = useQuery({
     queryKey: ["empleados-rrhh"],
@@ -38,60 +67,100 @@ export default function RecursosHumanos() {
   });
 
   const empleadosActivos = empleados?.filter((e) => e.activo) || [];
-  const empleadosInactivos = empleados?.filter((e) => !e.activo) || [];
-  const profesionales = empleadosActivos.filter(e => e.es_profesional);
+  const profesionales = empleadosActivos.filter((e) => e.es_profesional);
 
-  // KPI stats - Productividad
-  const { data: statsProductividad } = useQuery({
-    queryKey: ['stats-productividad-semana'],
+  const { data: resumenMes } = useQuery({
+    queryKey: ["rrhh-resumen-mes", inicioMes, finMes],
     queryFn: async () => {
-      const hoy = new Date();
-      const inicioSemana = new Date(hoy);
-      inicioSemana.setDate(hoy.getDate() - hoy.getDay() + (hoy.getDay() === 0 ? -6 : 1));
-      
-      const { data, error } = await supabase
-        .from('vw_productividad_empleado')
-        .select('*')
-        .gte('semana_inicio', inicioSemana.toISOString().split('T')[0]);
-      
-      if (error) throw error;
-      return data || [];
+      const [agendasRes, ventasRes] = await Promise.all([
+        supabase
+          .from("agendas")
+          .select("id, id_empleado, estado, fecha")
+          .gte("fecha", inicioMes)
+          .lte("fecha", finMes)
+          .not("id_empleado", "is", null),
+        supabase
+          .from("ventas")
+          .select("id_cita, estado_venta, total, monto_final_mxn, fecha")
+          .gte("fecha", inicioMes)
+          .lte("fecha", finMes),
+      ]);
+
+      if (agendasRes.error) throw agendasRes.error;
+      if (ventasRes.error) throw ventasRes.error;
+
+      return {
+        agendasMes: agendasRes.data || [],
+        ventasMes: ventasRes.data || [],
+      };
     },
   });
 
-  // KPI stats - Citas de la semana
-  const { data: citasSemana } = useQuery({
-    queryKey: ['citas-semana-rrhh'],
-    queryFn: async () => {
-      const hoy = new Date();
-      const inicioSemana = new Date(hoy);
-      inicioSemana.setDate(hoy.getDate() - hoy.getDay() + (hoy.getDay() === 0 ? -6 : 1));
-      const finSemana = new Date(inicioSemana);
-      finSemana.setDate(inicioSemana.getDate() + 6);
-      
-      const { data, error } = await supabase
-        .from('agendas')
-        .select('*')
-        .gte('fecha', inicioSemana.toISOString().split('T')[0])
-        .lte('fecha', finSemana.toISOString().split('T')[0])
-        .not('id_empleado', 'is', null);
-      
-      if (error) throw error;
-      return data || [];
-    },
-  });
+  const metricasMensuales = useMemo(() => {
+    const agendasMes = resumenMes?.agendasMes || [];
+    const ventasMes = resumenMes?.ventasMes || [];
 
-  const totalHorasSemana = statsProductividad?.reduce((sum, e) => sum + Number(e.horas_trabajadas || 0), 0) || 0;
-  const totalComisionesSemana = statsProductividad?.reduce((sum, e) => sum + Number(e.comision_mxn || 0), 0) || 0;
-  
-  // Calcular métricas de agenda
-  const citasCompletadas = citasSemana?.filter(c => c.estado === 'asistida' || c.estado === 'finalizada').length || 0;
-  const citasTotales = citasSemana?.length || 0;
-  const tasaAsistencia = citasTotales > 0 ? ((citasCompletadas / citasTotales) * 100).toFixed(1) : '0.0';
-  
-  // Calcular utilización real (horas trabajadas vs horas disponibles)
-  const horasDisponiblesSemana = empleadosActivos.reduce((sum, e) => sum + Number(e.horas_semana || 0), 0);
-  const utilizacionReal = horasDisponiblesSemana > 0 ? ((totalHorasSemana / horasDisponiblesSemana) * 100).toFixed(1) : '0.0';
+    const citasPorEmpleado = new Map<number, number>();
+    const ingresosPorEmpleado = new Map<number, number>();
+    const agendaById = new Map<number, number>();
+
+    agendasMes.forEach((agenda) => {
+      if (!agenda.id_empleado) return;
+      agendaById.set(agenda.id, agenda.id_empleado);
+      if (!ESTADOS_COMPLETADOS.has(normalizeEstado(agenda.estado))) return;
+      citasPorEmpleado.set(agenda.id_empleado, (citasPorEmpleado.get(agenda.id_empleado) || 0) + 1);
+    });
+
+    ventasMes.forEach((venta) => {
+      if ((venta.estado_venta || "").toLowerCase() !== "cerrada") return;
+      if (!venta.id_cita) return;
+      const idEmpleado = agendaById.get(venta.id_cita);
+      if (!idEmpleado) return;
+
+      const monto = Number(venta.monto_final_mxn ?? venta.total ?? 0);
+      ingresosPorEmpleado.set(idEmpleado, (ingresosPorEmpleado.get(idEmpleado) || 0) + monto);
+    });
+
+    const rows = (empleados || []).map((emp) => {
+      const nombreCompleto = fullName(emp.nombre, emp.apellidos);
+      return {
+        id: emp.id,
+        nombreCompleto,
+        especialidadCargo: emp.especialidad || emp.cargo || "Sin especialidad/cargo",
+        citasMes: citasPorEmpleado.get(emp.id) || 0,
+        ingresosMes: ingresosPorEmpleado.get(emp.id) || 0,
+        activo: Boolean(emp.activo),
+        iniciales: initials(emp.nombre, emp.apellidos),
+      };
+    });
+
+    const totalCitasCompletadasMes = rows.reduce((sum, row) => sum + row.citasMes, 0);
+    const empleadoDelMes = [...rows].sort((a, b) => b.citasMes - a.citasMes)[0] || null;
+    const topIngresos = [...rows]
+      .filter((row) => row.ingresosMes > 0)
+      .sort((a, b) => b.ingresosMes - a.ingresosMes)
+      .slice(0, 3);
+
+    return {
+      rows,
+      totalCitasCompletadasMes,
+      empleadoDelMes,
+      topIngresos,
+    };
+  }, [resumenMes, empleados]);
+
+  const empleadosFiltrados = useMemo(() => {
+    const term = busquedaEmpleado.trim().toLowerCase();
+    if (!term) return metricasMensuales.rows;
+    return metricasMensuales.rows.filter((row) => row.nombreCompleto.toLowerCase().includes(term));
+  }, [metricasMensuales.rows, busquedaEmpleado]);
+
+  const medalForPosition = (index: number) => {
+    if (index === 0) return "🥇";
+    if (index === 1) return "🥈";
+    if (index === 2) return "🥉";
+    return "";
+  };
 
   return (
     <AppLayout>
@@ -105,10 +174,10 @@ export default function RecursosHumanos() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Empleados Activos</CardTitle>
+            <CardTitle className="text-sm font-medium">Total empleados activos</CardTitle>
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -121,42 +190,121 @@ export default function RecursosHumanos() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Citas Completadas</CardTitle>
+            <CardTitle className="text-sm font-medium">Citas completadas este mes</CardTitle>
             <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{citasCompletadas}</div>
+            <div className="text-2xl font-bold">{metricasMensuales.totalCitasCompletadasMes}</div>
             <p className="text-xs text-muted-foreground">
-              de {citasTotales} programadas
+              Suma de todos los empleados
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Tasa de Asistencia</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Empleado del mes</CardTitle>
+            <Award className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{tasaAsistencia}%</div>
-            <p className="text-xs text-muted-foreground">
-              Semana actual
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Comisiones Semana</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              ${totalComisionesSemana.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+            <div className="text-lg font-semibold truncate">
+              {metricasMensuales.empleadoDelMes?.nombreCompleto || "Sin datos"}
             </div>
             <p className="text-xs text-muted-foreground">
-              MXN proyectado
+              {metricasMensuales.empleadoDelMes
+                ? `${metricasMensuales.empleadoDelMes.citasMes} citas completadas`
+                : "Aún no hay citas completadas"}
             </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Top 3 por ingresos del mes</CardTitle>
+            <CardDescription>Ranking según ventas cerradas asociadas a citas</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {metricasMensuales.topIngresos.length > 0 ? (
+                metricasMensuales.topIngresos.map((emp, index) => (
+                  <div key={emp.id} className="flex items-center justify-between gap-3 rounded-md border p-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xl" aria-hidden>
+                        {medalForPosition(index)}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{emp.nombreCompleto}</p>
+                        <p className="text-xs text-muted-foreground">{emp.citasMes} citas</p>
+                      </div>
+                    </div>
+                    <p className="text-sm font-semibold whitespace-nowrap">{formatCurrency(emp.ingresosMes)}</p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">No hay ingresos registrados este mes.</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader className="space-y-3">
+            <div>
+              <CardTitle>Equipo</CardTitle>
+              <CardDescription>Productividad e ingresos por empleado del mes actual</CardDescription>
+            </div>
+            <Input
+              value={busquedaEmpleado}
+              onChange={(e) => setBusquedaEmpleado(e.target.value)}
+              placeholder="Buscar por nombre de empleado"
+            />
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Empleado</TableHead>
+                    <TableHead>Especialidad / Cargo</TableHead>
+                    <TableHead className="text-right">Citas del mes</TableHead>
+                    <TableHead className="text-right">Ingresos del mes</TableHead>
+                    <TableHead className="text-right">Estado</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {empleadosFiltrados.map((emp) => (
+                    <TableRow key={emp.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          <Avatar className="h-9 w-9">
+                            <AvatarFallback>{emp.iniciales}</AvatarFallback>
+                          </Avatar>
+                          <span className="font-medium">{emp.nombreCompleto}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>{emp.especialidadCargo}</TableCell>
+                      <TableCell className="text-right">{emp.citasMes}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(emp.ingresosMes)}</TableCell>
+                      <TableCell className="text-right">
+                        <Badge variant={emp.activo ? "default" : "secondary"}>
+                          {emp.activo ? "Activo" : "Inactivo"}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+
+                  {empleadosFiltrados.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                        No se encontraron empleados para la búsqueda actual.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
       </div>
