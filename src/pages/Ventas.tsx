@@ -9,15 +9,30 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { format, startOfMonth, endOfMonth, subMonths, startOfYear } from "date-fns";
+import {
+  format,
+  startOfDay,
+  endOfDay,
+  startOfWeek,
+  endOfWeek,
+  startOfMonth,
+  endOfMonth,
+  startOfYear,
+  endOfYear,
+  subDays,
+} from "date-fns";
 import { es } from "date-fns/locale";
-import { CalendarIcon, DollarSign, Percent, TrendingUp, Loader2, X, Download, Receipt, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { CalendarIcon, Loader2, X, Download, Receipt, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SalesCharts } from "@/components/ventas/SalesCharts";
 import { StackedDailyChart } from "@/components/ventas/StackedDailyChart";
 import { DetalleVentaItems } from "@/components/ventas/DetalleVentaItems";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
+
+type PeriodoRapido = "hoy" | "semana" | "mes" | "anio";
 
 const Ventas = () => {
   const queryClient = useQueryClient();
@@ -25,6 +40,7 @@ const Ventas = () => {
   const [fechaFin, setFechaFin] = useState<Date>();
   const [metodoPago, setMetodoPago] = useState<string>("todos");
   const [sucursalFiltro, setSucursalFiltro] = useState<string>("todas");
+  const [periodoRapido, setPeriodoRapido] = useState<PeriodoRapido | null>(null);
   const [ventaExpandida, setVentaExpandida] = useState<number | null>(null);
   const [ventaAEliminar, setVentaAEliminar] = useState<{ id: number; cliente: string } | null>(null);
   const [eliminando, setEliminando] = useState(false);
@@ -162,13 +178,130 @@ const Ventas = () => {
     },
   });
 
+  const { data: resumenKpis } = useQuery({
+    queryKey: ["ventas-kpis-header", sucursalFiltro],
+    queryFn: async () => {
+      const ahora = new Date();
+      let query = (supabase as any)
+        .from("ventas")
+        .select("fecha, total")
+        .in("estado_venta", ["cerrada", "Completada"])
+        .gte("fecha", format(startOfMonth(ahora), "yyyy-MM-dd"))
+        .lte("fecha", format(endOfMonth(ahora), "yyyy-MM-dd"));
+
+      if (sucursalFiltro !== "todas") {
+        query = query.eq("id_sucursal", parseInt(sucursalFiltro));
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const hoy = format(ahora, "yyyy-MM-dd");
+      const ventasMes = data ?? [];
+
+      const ventasHoy = ventasMes.filter((venta: any) => {
+        if (!venta.fecha) return false;
+        return format(new Date(venta.fecha), "yyyy-MM-dd") === hoy;
+      });
+
+      const totalHoy = ventasHoy.reduce((acc: number, venta: any) => acc + Number(venta.total || 0), 0);
+      const totalMes = ventasMes.reduce((acc: number, venta: any) => acc + Number(venta.total || 0), 0);
+      const ticketPromedioMes = ventasMes.length > 0 ? totalMes / ventasMes.length : 0;
+
+      return {
+        totalHoy,
+        totalMes,
+        ticketPromedioMes,
+      };
+    },
+  });
+
+  const { data: ventasUltimos7Dias } = useQuery({
+    queryKey: ["ventas-mini-chart-7d", sucursalFiltro],
+    queryFn: async () => {
+      const hoy = new Date();
+      const inicio = subDays(hoy, 6);
+
+      let query = (supabase as any)
+        .from("ventas")
+        .select("fecha, total")
+        .in("estado_venta", ["cerrada", "Completada"])
+        .gte("fecha", format(inicio, "yyyy-MM-dd"))
+        .lte("fecha", format(hoy, "yyyy-MM-dd"));
+
+      if (sucursalFiltro !== "todas") {
+        query = query.eq("id_sucursal", parseInt(sucursalFiltro));
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const mapPorDia = new Map<string, number>();
+
+      for (let i = 0; i < 7; i++) {
+        const fecha = subDays(hoy, 6 - i);
+        mapPorDia.set(format(fecha, "yyyy-MM-dd"), 0);
+      }
+
+      (data ?? []).forEach((venta: any) => {
+        if (!venta.fecha) return;
+        const key = format(new Date(venta.fecha), "yyyy-MM-dd");
+        if (!mapPorDia.has(key)) return;
+        mapPorDia.set(key, (mapPorDia.get(key) || 0) + Number(venta.total || 0));
+      });
+
+      return Array.from(mapPorDia.entries()).map(([fechaIso, monto]) => ({
+        fecha: format(new Date(fechaIso), "dd/MM"),
+        monto,
+      }));
+    },
+  });
+
+  const idsVentas = useMemo(
+    () => (ventas ?? []).map((venta: any) => Number(venta.id)).filter((id: number) => Number.isFinite(id)),
+    [ventas]
+  );
+
+  const { data: detalleVentas } = useQuery({
+    queryKey: ["ventas-detalle-lista", idsVentas],
+    enabled: idsVentas.length > 0,
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("vw_ventas_detalle_descuentos")
+        .select("id_venta, servicio_nombre, profesional_nombre")
+        .in("id_venta", idsVentas);
+
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const detallePorVenta = useMemo(() => {
+    const map = new Map<number, { servicios: string[]; empleados: string[] }>();
+
+    (detalleVentas ?? []).forEach((item: any) => {
+      const idVenta = Number(item.id_venta);
+      if (!idVenta) return;
+
+      const actual = map.get(idVenta) ?? { servicios: [], empleados: [] };
+      if (item.servicio_nombre && !actual.servicios.includes(item.servicio_nombre)) {
+        actual.servicios.push(item.servicio_nombre);
+      }
+      if (item.profesional_nombre && !actual.empleados.includes(item.profesional_nombre)) {
+        actual.empleados.push(item.profesional_nombre);
+      }
+
+      map.set(idVenta, actual);
+    });
+
+    return map;
+  }, [detalleVentas]);
+
   // KPIs calculados
   const promedioDescuento = ventas?.reduce((acc: number, v: any) => acc + (Number(v.promedio_descuento_porcentaje) || 0), 0) / (ventas?.length || 1);
-  const totalAnticipos = anticiposPendientes?.reduce((acc: number, a: any) => acc + (Number(a.monto) || 0), 0) || 0;
   const totalVentas = ventas?.reduce((acc: number, v: any) => acc + (Number(v.total) || 0), 0) || 0;
   const totalDescuentos = ventas?.reduce((acc: number, v: any) => acc + (Number(v.descuento) || 0), 0) || 0;
   const ventasNetas = totalVentas - totalDescuentos;
-  const ticketPromedio = ventas?.length ? totalVentas / ventas.length : 0;
   const numeroVentas = ventas?.length || 0;
 
   // Datos para gráficos
@@ -259,6 +392,39 @@ const Ventas = () => {
     setFechaFin(undefined);
     setMetodoPago("todos");
     setSucursalFiltro("todas");
+    setPeriodoRapido(null);
+  };
+
+  const aplicarPeriodoRapido = (periodo: PeriodoRapido) => {
+    const ahora = new Date();
+
+    if (periodo === "hoy") {
+      setFechaInicio(startOfDay(ahora));
+      setFechaFin(endOfDay(ahora));
+    }
+
+    if (periodo === "semana") {
+      setFechaInicio(startOfWeek(ahora, { weekStartsOn: 1 }));
+      setFechaFin(endOfWeek(ahora, { weekStartsOn: 1 }));
+    }
+
+    if (periodo === "mes") {
+      setFechaInicio(startOfMonth(ahora));
+      setFechaFin(endOfMonth(ahora));
+    }
+
+    if (periodo === "anio") {
+      setFechaInicio(startOfYear(ahora));
+      setFechaFin(endOfYear(ahora));
+    }
+
+    setPeriodoRapido(periodo);
+  };
+
+  const obtenerIniciales = (nombreCompleto?: string | null) => {
+    if (!nombreCompleto) return "CL";
+    const partes = nombreCompleto.trim().split(/\s+/).filter(Boolean);
+    return partes.slice(0, 2).map((p) => p[0]?.toUpperCase() || "").join("") || "CL";
   };
 
   const handleExportExcel = async () => {
@@ -292,78 +458,45 @@ const Ventas = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Ventas Totales</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Ventas hoy</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-primary">
-              {formatCurrency(totalVentas)}
+              {formatCurrency(resumenKpis?.totalHoy || 0)}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              {numeroVentas} ventas
+              Total del día
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Ventas Netas</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Ventas del mes</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-success">
-              {formatCurrency(ventasNetas)}
+            <div className="text-2xl font-bold text-primary">
+              {formatCurrency(resumenKpis?.totalMes || 0)}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Después de descuentos
+              Mes actual
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">% Descuento</CardTitle>
-            <Percent className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Ticket promedio</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-warning">
-              {promedioDescuento.toFixed(2)}%
+            <div className="text-2xl font-bold text-primary">
+              {formatCurrency(resumenKpis?.ticketPromedioMes || 0)}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Promedio
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Ticket Promedio</CardTitle>
-            <Receipt className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-secondary">
-              {formatCurrency(ticketPromedio)}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Por venta
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Nº Ventas</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-info">
-              {numeroVentas}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              En el período
+              Promedio por venta del mes
             </p>
           </CardContent>
         </Card>
@@ -383,6 +516,37 @@ const Ventas = () => {
           </div>
         </CardHeader>
         <CardContent>
+          <div className="mb-4 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant={periodoRapido === "hoy" ? "default" : "outline"}
+              onClick={() => aplicarPeriodoRapido("hoy")}
+            >
+              Hoy
+            </Button>
+            <Button
+              size="sm"
+              variant={periodoRapido === "semana" ? "default" : "outline"}
+              onClick={() => aplicarPeriodoRapido("semana")}
+            >
+              Esta semana
+            </Button>
+            <Button
+              size="sm"
+              variant={periodoRapido === "mes" ? "default" : "outline"}
+              onClick={() => aplicarPeriodoRapido("mes")}
+            >
+              Este mes
+            </Button>
+            <Button
+              size="sm"
+              variant={periodoRapido === "anio" ? "default" : "outline"}
+              onClick={() => aplicarPeriodoRapido("anio")}
+            >
+              Este año
+            </Button>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="space-y-2">
               <Label>Fecha Inicio</Label>
@@ -471,6 +635,34 @@ const Ventas = () => {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle>Ventas últimos 7 días</CardTitle>
+          <CardDescription>Mini gráfico de barras con ventas reales</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={ventasUltimos7Dias || []}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+              <XAxis dataKey="fecha" stroke="hsl(var(--muted-foreground))" />
+              <YAxis
+                stroke="hsl(var(--muted-foreground))"
+                tickFormatter={(value: number) => formatCurrency(value)}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "hsl(var(--card))",
+                  border: "1px solid hsl(var(--border))",
+                  borderRadius: "var(--radius)",
+                }}
+                formatter={(value: number) => formatCurrency(value)}
+              />
+              <Bar dataKey="monto" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
       <StackedDailyChart 
         data={chartData.stackedDailyData} 
         totalServicios={totalServicios}
@@ -507,13 +699,10 @@ const Ventas = () => {
                     <TableHead className="w-12"></TableHead>
                     <TableHead>Fecha</TableHead>
                     <TableHead>Cliente</TableHead>
-                    <TableHead>Sucursal</TableHead>
-                    <TableHead className="text-right">Precio Original</TableHead>
-                    <TableHead className="text-right">Descuento %</TableHead>
-                    <TableHead className="text-right">Descuento $</TableHead>
-                    <TableHead className="text-right">Total Final</TableHead>
+                    <TableHead>Servicios vendidos</TableHead>
+                    <TableHead>Empleado</TableHead>
                     <TableHead>Método Pago</TableHead>
-                    <TableHead>Estado</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
                     <TableHead className="w-12">Acciones</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -533,37 +722,27 @@ const Ventas = () => {
                         <TableCell>
                           {format(new Date(venta.fecha), "dd/MM/yyyy")}
                         </TableCell>
-                        <TableCell className="font-medium">{venta.cliente}</TableCell>
-                        <TableCell>{venta.sucursal}</TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(Number(venta.total_precio_original) || 0)}
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <Avatar className="h-8 w-8">
+                              <AvatarFallback className="text-xs font-semibold">
+                                {obtenerIniciales(venta.cliente)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="font-medium">{venta.cliente}</span>
+                          </div>
                         </TableCell>
-                        <TableCell className="text-right">
-                          <Badge variant="secondary">
-                            {Number(venta.promedio_descuento_porcentaje || 0).toFixed(1)}%
-                          </Badge>
+                        <TableCell className="max-w-[320px] truncate" title={(detallePorVenta.get(Number(venta.id))?.servicios || []).join(", ")}>
+                          {(detallePorVenta.get(Number(venta.id))?.servicios || []).join(", ") || "Sin servicios"}
                         </TableCell>
-                        <TableCell className="text-right text-destructive">
-                          -{formatCurrency(Number(venta.descuento) || 0)}
-                        </TableCell>
-                        <TableCell className="text-right font-bold text-primary">
-                          {formatCurrency(Number(venta.total) || 0)}
+                        <TableCell className="max-w-[220px] truncate" title={(detallePorVenta.get(Number(venta.id))?.empleados || []).join(", ")}>
+                          {(detallePorVenta.get(Number(venta.id))?.empleados || []).join(", ") || "Sin empleado"}
                         </TableCell>
                         <TableCell>
                           <Badge variant="outline">{venta.metodos_pago}</Badge>
                         </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              venta.estado_venta === "Completada"
-                                ? "default"
-                                : venta.estado_venta === "Pendiente"
-                                ? "secondary"
-                                : "destructive"
-                            }
-                          >
-                            {venta.estado_venta}
-                          </Badge>
+                        <TableCell className="text-right font-bold text-green-600">
+                          {formatCurrency(Number(venta.total) || 0)}
                         </TableCell>
                         <TableCell>
                           <Button
@@ -581,7 +760,7 @@ const Ventas = () => {
                       </TableRow>
                       {ventaExpandida === venta.id && (
                         <TableRow>
-                          <TableCell colSpan={11} className="p-0">
+                          <TableCell colSpan={8} className="p-0">
                             <DetalleVentaItems idVenta={venta.id} />
                           </TableCell>
                         </TableRow>
