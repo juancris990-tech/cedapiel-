@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,430 +7,234 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Upload, Search, Download, XCircle, TrendingDown } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
-import * as XLSX from 'xlsx';
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { CalendarX, Search, TrendingDown } from "lucide-react";
+import { endOfMonth, format, startOfMonth, subDays } from "date-fns";
 
-interface CitaCancelada {
+type AgendaCancelada = {
   id: number;
-  fecha_cita: string;
-  cliente: string;
-  email: string;
-  telefono: string;
-  numero_sms: string;
-  sucursal: string;
-  estado: string;
-  fecha_creacion: string;
-  staff_registro: string;
+  fecha: string;
   hora_inicio: string;
-  hora_fin: string;
-  profesional: string;
-  servicio: string;
-  equipo: string;
-  retenido: boolean;
-  reagendado: boolean;
-  facturado: boolean;
-  valor_mxn: number;
-}
+  estado: string | null;
+  motivo_cancelacion: string | null;
+  clientes: { nombre: string | null; apellidos: string | null } | null;
+  empleados: { nombre: string | null; apellidos: string | null } | null;
+  servicios: { nombre: string | null } | null;
+};
 
-interface Stats {
-  total: number;
-  porProfesional: { [key: string]: number };
-  porSucursal: { [key: string]: number };
-  porEstado: { [key: string]: number };
-  valorTotal: number;
-}
+type AgendaEstadoMes = {
+  id: number;
+  estado: string | null;
+  fecha: string;
+};
+
+const ESTADOS_CANCELADOS = new Set([
+  "cancelada",
+  "cancelada_cliente",
+  "cancelada_clinica",
+  "cancelled",
+]);
+
+const normalizeEstado = (estado?: string | null) => (estado || "").toLowerCase().trim();
+
+const getFullName = (person?: { nombre: string | null; apellidos: string | null } | null, fallback = "—") => {
+  const value = `${person?.nombre || ""} ${person?.apellidos || ""}`.trim();
+  return value || fallback;
+};
+
+const getInitials = (name: string) => {
+  const initials = name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("");
+
+  return initials || "CL";
+};
 
 export default function CitasCanceladas() {
-  const { toast } = useToast();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [filtros, setFiltros] = useState({
-    sucursal: "",
-    profesional: "",
-    estado: "",
-    servicio: "",
-    fecha_inicio: "",
-    fecha_fin: "",
-    search: ""
-  });
-  const [page, setPage] = useState(1);
-  const [uploading, setUploading] = useState(false);
+  const [periodoDias, setPeriodoDias] = useState<"7" | "30" | "90">("30");
+  const [search, setSearch] = useState("");
 
-  const { data: citas, isLoading, refetch } = useQuery({
-    queryKey: ['citas-canceladas', filtros, page],
+  const { data, isLoading } = useQuery({
+    queryKey: ["citas-canceladas-real", periodoDias],
     queryFn: async () => {
-      try {
-        const params = new URLSearchParams({
-          page: page.toString(),
-          limit: '50',
-          order_by: 'fecha_cita',
-          order_dir: 'desc',
-          ...Object.fromEntries(
-            Object.entries(filtros).filter(([_, v]) => v !== "")
-          )
-        });
+      const today = new Date();
+      const start = format(subDays(today, Number(periodoDias)), "yyyy-MM-dd");
+      const monthStart = format(startOfMonth(today), "yyyy-MM-dd");
+      const monthEnd = format(endOfMonth(today), "yyyy-MM-dd");
 
-        const { data: { session } } = await supabase.auth.getSession();
-        console.log('Session:', session ? 'exists' : 'null');
-        console.log('Fetching URL:', `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/citas-canceladas?${params.toString()}`);
-        
-        const response = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/citas-canceladas?${params.toString()}`,
-          {
-            headers: {
-              'Authorization': `Bearer ${session?.access_token}`,
-              'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-            },
-          }
-        );
+      const agendaSelect = `
+        id,
+        fecha,
+        hora_inicio,
+        estado,
+        motivo_cancelacion,
+        clientes:clientes!agendas_id_cliente_fkey(nombre, apellidos),
+        empleados:empleados!agendas_id_empleado_fkey(nombre, apellidos),
+        servicios:servicios!agendas_id_servicio_fkey(nombre)
+      `;
 
-        console.log('Response status:', response.status);
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('Error response:', errorText);
-          throw new Error(`Error ${response.status}: ${response.statusText}`);
-        }
+      const [canceladasRes, monthRes] = await Promise.all([
+        supabase
+          .from("agendas")
+          .select(agendaSelect)
+          .gte("fecha", start)
+          .lte("fecha", format(today, "yyyy-MM-dd"))
+          .order("fecha", { ascending: false })
+          .order("hora_inicio", { ascending: true }),
+        supabase
+          .from("agendas")
+          .select("id, estado, fecha")
+          .gte("fecha", monthStart)
+          .lte("fecha", monthEnd),
+      ]);
 
-        const data = await response.json();
-        console.log('Data received:', data);
-        return data;
-      } catch (error) {
-        console.error('Query error:', error);
-        throw error;
-      }
+      if (canceladasRes.error) throw canceladasRes.error;
+      if (monthRes.error) throw monthRes.error;
+
+      const rawCanceladas = (canceladasRes.data || []) as AgendaCancelada[];
+      const canceladas = rawCanceladas.filter((item) => ESTADOS_CANCELADOS.has(normalizeEstado(item.estado)));
+      const monthRows = (monthRes.data || []) as AgendaEstadoMes[];
+      const canceladasMes = monthRows.filter((row) => ESTADOS_CANCELADOS.has(normalizeEstado(row.estado))).length;
+      const tasaCancelacionMes = monthRows.length > 0 ? (canceladasMes / monthRows.length) * 100 : 0;
+
+      return {
+        canceladas,
+        kpi: {
+          total: canceladas.length,
+          canceladasMes,
+          totalMes: monthRows.length,
+          tasaCancelacionMes,
+        },
+      };
     },
   });
 
-  const stats: Stats | null = citas?.data ? {
-    total: citas.count || 0,
-    porProfesional: citas.data.reduce((acc: any, c: CitaCancelada) => {
-      if (c.profesional) {
-        acc[c.profesional] = (acc[c.profesional] || 0) + 1;
-      }
-      return acc;
-    }, {}),
-    porSucursal: citas.data.reduce((acc: any, c: CitaCancelada) => {
-      acc[c.sucursal] = (acc[c.sucursal] || 0) + 1;
-      return acc;
-    }, {}),
-    porEstado: citas.data.reduce((acc: any, c: CitaCancelada) => {
-      if (c.estado) {
-        acc[c.estado] = (acc[c.estado] || 0) + 1;
-      }
-      return acc;
-    }, {}),
-    valorTotal: citas.data.reduce((sum: number, c: CitaCancelada) => sum + (c.valor_mxn || 0), 0)
-  } : null;
+  const canceladasFiltradas = useMemo(() => {
+    const rows = data?.canceladas || [];
+    if (!search.trim()) return rows;
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setUploading(true);
-    try {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        try {
-          const data = e.target?.result;
-          const workbook = XLSX.read(data, { type: 'binary' });
-          const sheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[sheetName];
-          const jsonData = XLSX.utils.sheet_to_json(worksheet);
-
-          console.log('Datos parseados del archivo:', jsonData.length, 'registros');
-
-          const { data: result, error } = await supabase.functions.invoke('citas-canceladas-importar', {
-            body: { data: jsonData }
-          });
-
-          if (error) {
-            console.error('Error de invocación:', error);
-            toast({
-              title: "Error en importación",
-              description: error.message || "Ocurrió un error",
-              variant: "destructive"
-            });
-            return;
-          }
-
-          console.log('Respuesta del servidor:', result);
-
-          if (result.success) {
-            toast({
-              title: "Importación exitosa",
-              description: `Se importaron ${result.inserted} de ${result.total} registros`,
-            });
-            refetch();
-          } else {
-            toast({
-              title: "Error en importación",
-              description: result.error || "Ocurrió un error",
-              variant: "destructive"
-            });
-          }
-        } catch (parseError) {
-          console.error('Error procesando archivo:', parseError);
-          toast({
-            title: "Error",
-            description: parseError instanceof Error ? parseError.message : "No se pudo procesar el archivo",
-            variant: "destructive"
-          });
-        }
-      };
-      
-      reader.onerror = () => {
-        toast({
-          title: "Error",
-          description: "No se pudo leer el archivo",
-          variant: "destructive"
-        });
-      };
-      
-      reader.readAsBinaryString(file);
-    } catch (error) {
-      console.error('Error general:', error);
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "No se pudo procesar el archivo",
-        variant: "destructive"
-      });
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    }
-  };
-
-  const exportToExcel = () => {
-    if (!citas?.data) return;
-    
-    const ws = XLSX.utils.json_to_sheet(citas.data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Citas Canceladas");
-    XLSX.writeFile(wb, `citas_canceladas_${new Date().toISOString().split('T')[0]}.xlsx`);
-  };
-
-  const topProfesional = stats ? Object.entries(stats.porProfesional).sort((a, b) => b[1] - a[1])[0] : null;
-  const topSucursal = stats ? Object.entries(stats.porSucursal).sort((a, b) => b[1] - a[1])[0] : null;
-  const estadoMasComun = stats ? Object.entries(stats.porEstado).sort((a, b) => b[1] - a[1])[0] : null;
+    const term = search.trim().toLowerCase();
+    return rows.filter((item) => {
+      const cliente = getFullName(item.clientes).toLowerCase();
+      const servicio = (item.servicios?.nombre || "").toLowerCase();
+      const empleado = getFullName(item.empleados).toLowerCase();
+      const motivo = (item.motivo_cancelacion || "").toLowerCase();
+      return cliente.includes(term) || servicio.includes(term) || empleado.includes(term) || motivo.includes(term);
+    });
+  }, [data?.canceladas, search]);
 
   return (
     <div className="container mx-auto p-6 space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">Citas Canceladas</h1>
-          <p className="text-muted-foreground">Análisis detallado de citas canceladas</p>
+          <h1 className="text-3xl font-bold tracking-tight">Citas Canceladas</h1>
+          <p className="text-muted-foreground">Cancelaciones de los últimos 7, 30 o 90 días.</p>
         </div>
-        <div className="flex gap-2">
-          <Button onClick={exportToExcel} variant="outline" disabled={!citas?.data}>
-            <Download className="mr-2 h-4 w-4" />
-            Exportar
-          </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv,.xlsx,.xls"
-            className="hidden"
-            onChange={handleFileUpload}
-            disabled={uploading}
-          />
-          <Button 
-            onClick={() => fileInputRef.current?.click()} 
-            variant="default"
-            disabled={uploading}
-          >
-            <Upload className="mr-2 h-4 w-4" />
-            {uploading ? "Subiendo..." : "Importar CSV"}
-          </Button>
+        <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+          <Select value={periodoDias} onValueChange={(v) => setPeriodoDias(v as "7" | "30" | "90") }>
+            <SelectTrigger className="w-full sm:w-[180px]">
+              <SelectValue placeholder="Período" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="7">Últimos 7 días</SelectItem>
+              <SelectItem value="30">Últimos 30 días</SelectItem>
+              <SelectItem value="90">Últimos 90 días</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
-      {/* Estadísticas */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Canceladas</CardTitle>
-            <XCircle className="h-4 w-4 text-muted-foreground" />
+            <CalendarX className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats?.total || 0}</div>
+            <div className="text-2xl font-bold">{data?.kpi.total || 0}</div>
+            <p className="text-xs text-muted-foreground">Período seleccionado</p>
           </CardContent>
         </Card>
-
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Profesional con más cancelaciones</CardTitle>
+            <CardTitle className="text-sm font-medium">Tasa cancelación mensual</CardTitle>
             <TrendingDown className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-xl font-bold truncate">{topProfesional?.[0] || "N/A"}</div>
-            <p className="text-xs text-muted-foreground">{topProfesional?.[1] || 0} cancelaciones</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Sucursal con más cancelaciones</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl font-bold truncate">{topSucursal?.[0] || "N/A"}</div>
-            <p className="text-xs text-muted-foreground">{topSucursal?.[1] || 0} cancelaciones</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Estado más común</CardTitle>
-            <Badge variant="outline">{estadoMasComun?.[1] || 0}</Badge>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl font-bold truncate">{estadoMasComun?.[0] || "N/A"}</div>
-            <p className="text-xs text-muted-foreground">Valor total: ${(stats?.valorTotal || 0).toLocaleString()}</p>
+            <div className="text-2xl font-bold">{(data?.kpi.tasaCancelacionMes || 0).toFixed(1)}%</div>
+            <p className="text-xs text-muted-foreground">
+              {data?.kpi.canceladasMes || 0} de {data?.kpi.totalMes || 0} citas del mes
+            </p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Filtros */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Filtros</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <div className="relative">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Buscar cliente, profesional..."
-                value={filtros.search}
-                onChange={(e) => setFiltros({ ...filtros, search: e.target.value })}
-                className="pl-8"
-              />
-            </div>
-
-            <Input
-              type="text"
-              placeholder="Sucursal"
-              value={filtros.sucursal}
-              onChange={(e) => setFiltros({ ...filtros, sucursal: e.target.value })}
-            />
-
-            <Input
-              type="text"
-              placeholder="Profesional"
-              value={filtros.profesional}
-              onChange={(e) => setFiltros({ ...filtros, profesional: e.target.value })}
-            />
-
-            <Input
-              type="text"
-              placeholder="Estado"
-              value={filtros.estado}
-              onChange={(e) => setFiltros({ ...filtros, estado: e.target.value })}
-            />
-
-            <Input
-              type="date"
-              placeholder="Fecha inicio"
-              value={filtros.fecha_inicio}
-              onChange={(e) => setFiltros({ ...filtros, fecha_inicio: e.target.value })}
-            />
-
-            <Input
-              type="date"
-              placeholder="Fecha fin"
-              value={filtros.fecha_fin}
-              onChange={(e) => setFiltros({ ...filtros, fecha_fin: e.target.value })}
-            />
-
-            <Button 
-              variant="outline" 
-              onClick={() => setFiltros({
-                sucursal: "",
-                profesional: "",
-                estado: "",
-                servicio: "",
-                fecha_inicio: "",
-                fecha_fin: "",
-                search: ""
-              })}
-            >
-              Limpiar filtros
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Tabla */}
       <Card>
         <CardHeader>
           <CardTitle>Listado de Citas Canceladas</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <div className="relative max-w-md">
+            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar cliente, servicio, empleado o motivo"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8"
+            />
+          </div>
+
           {isLoading ? (
             <div className="text-center py-8">Cargando...</div>
+          ) : canceladasFiltradas.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">No hay citas canceladas para el período seleccionado.</div>
           ) : (
-            <>
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Fecha</TableHead>
-                      <TableHead>Cliente</TableHead>
-                      <TableHead>Profesional</TableHead>
-                      <TableHead>Servicio</TableHead>
-                      <TableHead>Sucursal</TableHead>
-                      <TableHead>Estado</TableHead>
-                      <TableHead>Hora</TableHead>
-                      <TableHead className="text-right">Valor</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {citas?.data?.map((cita: CitaCancelada) => (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Fecha</TableHead>
+                    <TableHead>Cliente</TableHead>
+                    <TableHead>Servicio</TableHead>
+                    <TableHead>Empleado</TableHead>
+                    <TableHead>Motivo cancelación</TableHead>
+                    <TableHead className="text-right">Estado</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {canceladasFiltradas.map((cita) => {
+                    const cliente = getFullName(cita.clientes, "Sin cliente");
+                    return (
                       <TableRow key={cita.id}>
-                        <TableCell>{new Date(cita.fecha_cita).toLocaleDateString()}</TableCell>
-                        <TableCell className="font-medium">{cita.cliente}</TableCell>
-                        <TableCell>{cita.profesional}</TableCell>
-                        <TableCell>{cita.servicio}</TableCell>
-                        <TableCell>{cita.sucursal}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{cita.estado}</Badge>
+                        <TableCell className="text-sm">
+                          <div>{new Date(cita.fecha).toLocaleDateString("es-CL")}</div>
+                          <div className="text-xs text-muted-foreground">{cita.hora_inicio?.slice(0, 5) || "—"}</div>
                         </TableCell>
-                        <TableCell>{cita.hora_inicio} - {cita.hora_fin}</TableCell>
-                        <TableCell className="text-right">${cita.valor_mxn?.toLocaleString()}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <Avatar className="h-8 w-8">
+                              <AvatarFallback className="text-xs">{getInitials(cliente)}</AvatarFallback>
+                            </Avatar>
+                            <span className="font-medium">{cliente}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>{cita.servicios?.nombre || "—"}</TableCell>
+                        <TableCell>{getFullName(cita.empleados)}</TableCell>
+                        <TableCell className="max-w-[320px] truncate" title={cita.motivo_cancelacion || "Sin motivo registrado"}>
+                          {cita.motivo_cancelacion || "Sin motivo registrado"}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Badge className="bg-red-500 hover:bg-red-500 text-white">Cancelada</Badge>
+                        </TableCell>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {/* Paginación */}
-              <div className="flex items-center justify-between mt-4">
-                <div className="text-sm text-muted-foreground">
-                  Mostrando página {page} de {citas?.totalPages || 1} ({citas?.count || 0} total)
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPage(p => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                  >
-                    Anterior
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPage(p => p + 1)}
-                    disabled={page >= (citas?.totalPages || 1)}
-                  >
-                    Siguiente
-                  </Button>
-                </div>
-              </div>
-            </>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>
