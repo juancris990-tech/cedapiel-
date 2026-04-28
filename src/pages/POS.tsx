@@ -7,7 +7,8 @@ import { POSBuscador } from "@/components/pos/POSBuscador";
 import { POSCarrito } from "@/components/pos/POSCarrito";
 import { VentasPendientes } from "@/components/pos/VentasPendientes";
 import { Card } from "@/components/ui/card";
-import { ShoppingCart } from "lucide-react";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { ShoppingCart, User } from "lucide-react";
 
 export default function POS() {
   const location = useLocation();
@@ -15,6 +16,16 @@ export default function POS() {
   const [idCliente, setIdCliente] = useState<number | null>(null);
   const [idSucursal, setIdSucursal] = useState<number | null>(null);
   const [refreshCarrito, setRefreshCarrito] = useState(0);
+  const [clienteNombre, setClienteNombre] = useState<string | null>(null);
+
+  const getInitials = (nombreCompleto: string) => {
+    return nombreCompleto
+      .split(" ")
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((parte) => parte[0]?.toUpperCase() || "")
+      .join("");
+  };
 
   // Pre-cargar venta desde agenda
   useEffect(() => {
@@ -104,6 +115,31 @@ export default function POS() {
     initFromAgenda();
   }, [location.state]);
 
+  useEffect(() => {
+    const fetchCliente = async () => {
+      if (!idCliente) {
+        setClienteNombre(null);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("clientes")
+        .select("nombre, apellidos")
+        .eq("id", idCliente)
+        .maybeSingle();
+
+      if (error || !data) {
+        setClienteNombre(null);
+        return;
+      }
+
+      const nombreCompleto = `${data.nombre ?? ""} ${data.apellidos ?? ""}`.trim();
+      setClienteNombre(nombreCompleto || null);
+    };
+
+    fetchCliente();
+  }, [idCliente]);
+
   const handleVentaCreada = (ventaId: number, clienteId: number, sucursalId: number) => {
     setIdVenta(ventaId);
     setIdCliente(clienteId);
@@ -134,7 +170,7 @@ export default function POS() {
   return (
     <div className="space-y-5 md:space-y-6">
       <div className="rounded-2xl border border-border/70 bg-card p-4 md:p-5 shadow-sm">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl md:text-3xl font-semibold tracking-tight flex items-center gap-2">
               <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -143,6 +179,27 @@ export default function POS() {
               Punto de Venta (POS)
             </h1>
             <p className="text-muted-foreground text-sm md:text-base">Gestiona ventas de servicios y productos en un flujo simple</p>
+          </div>
+
+          <div className="w-full md:w-auto">
+            {clienteNombre ? (
+              <div className="inline-flex items-center gap-3 rounded-xl border border-primary/25 bg-primary/5 px-4 py-2">
+                <Avatar className="h-9 w-9 border border-primary/20">
+                  <AvatarFallback className="bg-primary/10 text-primary font-semibold text-sm">
+                    {getInitials(clienteNombre)}
+                  </AvatarFallback>
+                </Avatar>
+                <div>
+                  <p className="text-xs text-muted-foreground">Cliente seleccionado</p>
+                  <p className="text-sm font-semibold leading-tight">{clienteNombre}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="inline-flex items-center gap-2 rounded-xl border border-dashed border-border/80 bg-muted/30 px-4 py-2 text-sm text-muted-foreground">
+                <User className="h-4 w-4" />
+                Sin cliente seleccionado
+              </div>
+            )}
           </div>
         </div>
       </div>

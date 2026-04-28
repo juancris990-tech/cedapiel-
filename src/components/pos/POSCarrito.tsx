@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { ShoppingCart, Trash2, CreditCard, CheckCircle, XCircle, Gift, Pencil } from "lucide-react";
+import { ShoppingCart, Trash2, CreditCard, CheckCircle, XCircle, Gift, Pencil, Plus, Minus } from "lucide-react";
 import { POSAnticipos } from "./POSAnticipos";
 import { POSPagos } from "./POSPagos";
 import { POSEditarItemDialog } from "./POSEditarItemDialog";
@@ -142,6 +142,37 @@ export const POSCarrito = ({ idVenta, idCliente, refreshTrigger, onVentaCerrada 
     },
   });
 
+  const actualizarCantidadMutation = useMutation({
+    mutationFn: async ({ idItem, cantidad }: { idItem: number; cantidad: number }) => {
+      const { data: { session } } = await supabase.auth.getSession();
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+
+      const response = await fetch(`${supabaseUrl}/functions/v1/pos-item/${idItem}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${session?.access_token}`,
+          'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ cantidad }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error al actualizar cantidad');
+      }
+
+      return await response.json();
+    },
+    onSuccess: () => {
+      refetchItems();
+      refetchResumen();
+    },
+    onError: (error: any) => {
+      toast.error(error.message || "Error al actualizar cantidad");
+    },
+  });
+
   const cerrarVentaMutation = useMutation({
     mutationFn: async () => {
       // Verificar estado actual de la venta antes de cerrar
@@ -225,13 +256,13 @@ export const POSCarrito = ({ idVenta, idCliente, refreshTrigger, onVentaCerrada 
             El carrito está vacío
           </div>
         ) : (
-          <div className="border rounded-lg">
+          <div className="border rounded-lg overflow-hidden">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Item</TableHead>
-                  <TableHead className="text-right">Cant.</TableHead>
-                  <TableHead className="text-right">Precio</TableHead>
+                  <TableHead>Producto / Servicio</TableHead>
+                  <TableHead className="text-center">Cantidad</TableHead>
+                  <TableHead className="text-right">Precio unitario</TableHead>
                   <TableHead className="text-right">Subtotal</TableHead>
                   <TableHead className="w-20"></TableHead>
                 </TableRow>
@@ -245,11 +276,43 @@ export const POSCarrito = ({ idVenta, idCliente, refreshTrigger, onVentaCerrada 
                     <TableRow key={item.id}>
                       <TableCell>
                         <div>
-                          <div className="font-medium">{nombre}</div>
+                          <div className="font-semibold">{nombre}</div>
                           <Badge variant="outline" className="text-xs mt-1">{tipo}</Badge>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right">{item.cantidad}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center justify-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-7 w-7"
+                            disabled={Number(item.cantidad) <= 1 || actualizarCantidadMutation.isPending}
+                            onClick={() =>
+                              actualizarCantidadMutation.mutate({
+                                idItem: item.id,
+                                cantidad: Math.max(1, Number(item.cantidad) - 1),
+                              })
+                            }
+                          >
+                            <Minus className="h-3.5 w-3.5" />
+                          </Button>
+                          <span className="min-w-7 text-center font-semibold">{item.cantidad}</span>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-7 w-7"
+                            disabled={actualizarCantidadMutation.isPending}
+                            onClick={() =>
+                              actualizarCantidadMutation.mutate({
+                                idItem: item.id,
+                                cantidad: Number(item.cantidad) + 1,
+                              })
+                            }
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </TableCell>
                       <TableCell className="text-right">
                         {formatCurrency(item.precio_final_mxn)}
                       </TableCell>
@@ -288,20 +351,21 @@ export const POSCarrito = ({ idVenta, idCliente, refreshTrigger, onVentaCerrada 
         <Separator />
 
         {/* Totales */}
-        <div className="space-y-2">
-          <div className="flex justify-between text-muted-foreground">
-            <span>Total Original:</span>
+        <div className="space-y-3 rounded-xl border border-border/70 bg-muted/20 p-4">
+          <div className="flex justify-between text-sm text-muted-foreground">
+            <span>Subtotal:</span>
             <span>{formatCurrency(totalOriginal)}</span>
           </div>
           {totalDescuento > 0 && (
-            <div className="flex justify-between text-destructive">
+            <div className="flex justify-between text-sm text-destructive">
               <span>Descuentos:</span>
               <span>-{formatCurrency(totalDescuento)}</span>
             </div>
           )}
-          <div className="flex justify-between font-bold text-lg">
-            <span>Total Final:</span>
-            <span>{formatCurrency(totalFinal)}</span>
+          <Separator />
+          <div className="flex justify-between items-end">
+            <span className="font-semibold text-base">Total:</span>
+            <span className="text-3xl font-extrabold leading-none text-success">{formatCurrency(totalFinal)}</span>
           </div>
         </div>
 
@@ -407,12 +471,12 @@ export const POSCarrito = ({ idVenta, idCliente, refreshTrigger, onVentaCerrada 
             Cancelar
           </Button>
           <Button
-            className="flex-1"
+            className="flex-1 h-12 text-base font-bold bg-success hover:bg-success/90 text-success-foreground"
             onClick={() => cerrarVentaMutation.mutate()}
             disabled={!puedenCerrar || cerrarVentaMutation.isPending || items.length === 0}
           >
-            <CheckCircle className="h-4 w-4 mr-2" />
-            {cerrarVentaMutation.isPending ? "Cerrando..." : "Cerrar Venta"}
+            <CheckCircle className="h-5 w-5 mr-2" />
+            {cerrarVentaMutation.isPending ? "Cobrando..." : "Cobrar"}
           </Button>
         </div>
 
