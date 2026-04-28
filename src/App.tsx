@@ -31,7 +31,7 @@ import InventarioReportes from "./pages/InventarioReportes";
 import Usuarios from "./pages/Usuarios";
 import UsuarioPerfil from "./pages/UsuarioPerfil";
 import MiPerfil from "./pages/MiPerfil";
-import FacturacionDetalle from "./pages/FacturacionDetalle";
+import FacturacionDetallada from "./pages/FacturacionDetallada";
 import ClientesInactivos from "./pages/ClientesInactivos";
 import CitasCanceladas from "./pages/CitasCanceladas";
 import GastoClientes from "./pages/GastoClientes";
@@ -81,7 +81,7 @@ const App = () => (
           <Route path="/inventario/productos" element={<AppLayout><InventarioProductos /></AppLayout>} />
           <Route path="/inventario/movimientos" element={<AppLayout><InventarioMovimientos /></AppLayout>} />
           <Route path="/inventario/reportes" element={<AppLayout><InventarioReportes /></AppLayout>} />
-          <Route path="/facturacion-detalle" element={<AppLayout><FacturacionDetalle /></AppLayout>} />
+          <Route path="/facturacion-detalle" element={<AppLayout><FacturacionDetallada /></AppLayout>} />
           <Route path="/clientes-inactivos" element={<AppLayout><ClientesInactivos /></AppLayout>} />
           <Route path="/citas-canceladas" element={<AppLayout><CitasCanceladas /></AppLayout>} />
           <Route path="/gasto-clientes" element={<AppLayout><GastoClientes /></AppLayout>} />

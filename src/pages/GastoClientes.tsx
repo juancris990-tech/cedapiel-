@@ -1,21 +1,15 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Upload, Search, Filter, Download, TrendingUp, Users } from "lucide-react";
+import { Upload, Search, Download, TrendingUp, Users, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from 'xlsx';
 import { supabase } from "@/integrations/supabase/client";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 interface GastoCliente {
   id: number;
@@ -43,21 +37,12 @@ export default function GastoClientes() {
   const [uploading, setUploading] = useState(false);
   const [page, setPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState("monto_facturado_final_mxn");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
-  
-  // Filtros
-  const [montoMin, setMontoMin] = useState("");
-  const [montoMax, setMontoMax] = useState("");
-  const [citasMin, setCitasMin] = useState("");
-  const [citasMax, setCitasMax] = useState("");
-  const [conEmail, setConEmail] = useState<string>("todos");
 
   const limit = 50;
 
   // Query para obtener datos
   const { data: response, isLoading, refetch } = useQuery({
-    queryKey: ['gasto-clientes', page, searchTerm, sortBy, sortOrder, montoMin, montoMax, citasMin, citasMax, conEmail],
+    queryKey: ['gasto-clientes', page, searchTerm],
     queryFn: async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('No autenticado');
@@ -65,16 +50,11 @@ export default function GastoClientes() {
       const params = new URLSearchParams({
         page: page.toString(),
         limit: limit.toString(),
-        sortBy,
-        sortOrder,
+        sortBy: 'monto_facturado_final_mxn',
+        sortOrder: 'desc',
       });
 
       if (searchTerm) params.append('search', searchTerm);
-      if (montoMin) params.append('montoMin', montoMin);
-      if (montoMax) params.append('montoMax', montoMax);
-      if (citasMin) params.append('citasMin', citasMin);
-      if (citasMax) params.append('citasMax', citasMax);
-      if (conEmail !== 'todos') params.append('conEmail', conEmail);
 
       const response = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/gasto-clientes?${params.toString()}`,
@@ -168,10 +148,62 @@ export default function GastoClientes() {
     }).format(value);
   };
 
-  const totalClientes = response?.pagination?.total || 0;
-  const totalMonto = response?.data?.reduce((sum: number, c: GastoCliente) => sum + c.monto_facturado_final_mxn, 0) || 0;
-  const promedioCitas = response?.data?.length > 0
-    ? response.data.reduce((sum: number, c: GastoCliente) => sum + c.cantidad_citas_periodo, 0) / response.data.length
+  const getInitials = (name: string) =>
+    name
+      .split(" ")
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part.charAt(0).toUpperCase())
+      .join("") || "CL";
+
+  const getTier = (cliente: GastoCliente): "VIP" | "Regular" | "Nuevo" => {
+    const historial = Math.max(
+      cliente.visitas_registradas || 0,
+      cliente.cantidad_citas || 0,
+      cliente.cantidad_citas_periodo || 0,
+    );
+
+    if (historial >= 20) return "VIP";
+    if (historial >= 5) return "Regular";
+    return "Nuevo";
+  };
+
+  const getTierBadge = (tier: "VIP" | "Regular" | "Nuevo") => {
+    if (tier === "VIP") {
+      return (
+        <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-400">
+          VIP
+        </Badge>
+      );
+    }
+
+    if (tier === "Regular") {
+      return <Badge>Regular</Badge>;
+    }
+
+    return <Badge variant="secondary">Nuevo</Badge>;
+  };
+
+  const rankingData = useMemo(() => {
+    const data: GastoCliente[] = response?.data || [];
+    return [...data].sort((a, b) => b.monto_facturado_final_mxn - a.monto_facturado_final_mxn);
+  }, [response?.data]);
+
+  const totalClientes = rankingData.length;
+  const totalFacturado = rankingData.reduce((sum, c) => sum + c.monto_facturado_final_mxn, 0);
+  const gastoPromedio = totalClientes > 0 ? totalFacturado / totalClientes : 0;
+  const clienteTop = rankingData[0];
+
+  const hasRows = rankingData.length > 0;
+  const pageStart = (page - 1) * limit;
+
+  const rankingRows = rankingData.map((cliente, idx) => ({
+    ...cliente,
+    posicion: pageStart + idx + 1,
+  }));
+
+  const visitasPromedio = totalClientes > 0
+    ? rankingData.reduce((sum, c) => sum + (c.cantidad_citas_periodo || c.cantidad_citas || 0), 0) / totalClientes
     : 0;
 
   return (
@@ -209,135 +241,63 @@ export default function GastoClientes() {
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Clientes</CardTitle>
+            <CardTitle className="text-sm font-medium">Cliente Top</CardTitle>
+            <Trophy className="h-4 w-4 text-amber-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-bold truncate">{clienteTop?.cliente || "Sin datos"}</div>
+            <p className="text-xs text-muted-foreground">
+              {clienteTop ? formatCurrency(clienteTop.monto_facturado_final_mxn) : "Sin facturación"}
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Gasto promedio por cliente</CardTitle>
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{totalClientes}</div>
+            <div className="text-2xl font-bold">{formatCurrency(gastoPromedio)}</div>
+            <p className="text-xs text-muted-foreground">{totalClientes} clientes analizados</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Monto Total</CardTitle>
+            <CardTitle className="text-sm font-medium">Total facturado</CardTitle>
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(totalMonto)}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Promedio Citas</CardTitle>
-            <Filter className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{promedioCitas.toFixed(1)}</div>
+            <div className="text-2xl font-bold">{formatCurrency(totalFacturado)}</div>
+            <p className="text-xs text-muted-foreground">Visitas promedio: {visitasPromedio.toFixed(1)}</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Filtros y Búsqueda */}
+      {/* Búsqueda y ordenamiento */}
       <Card>
         <CardHeader>
-          <CardTitle>Filtros</CardTitle>
-          <CardDescription>Filtra y busca clientes específicos</CardDescription>
+          <CardTitle>Ranking de clientes</CardTitle>
+          <CardDescription>Ordenado por total gastado (MXN) de mayor a menor</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex gap-4 items-end">
+          <div className="flex flex-col gap-4 md:flex-row md:items-end">
             <div className="flex-1">
-              <Label htmlFor="search">Buscar</Label>
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
-                  id="search"
-                  placeholder="Nombre, email o teléfono..."
+                  placeholder="Buscar por nombre o teléfono..."
                   value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onChange={(e) => {
+                    setSearchTerm(e.target.value);
+                    setPage(1);
+                  }}
                   className="pl-8"
                 />
               </div>
             </div>
-            <div className="w-48">
-              <Label htmlFor="sortBy">Ordenar por</Label>
-              <Select value={sortBy} onValueChange={setSortBy}>
-                <SelectTrigger id="sortBy">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="monto_facturado_final_mxn">Monto Total</SelectItem>
-                  <SelectItem value="cantidad_citas_periodo">Número de Citas</SelectItem>
-                  <SelectItem value="cliente">Nombre</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="w-32">
-              <Label htmlFor="sortOrder">Orden</Label>
-              <Select value={sortOrder} onValueChange={(v) => setSortOrder(v as "asc" | "desc")}>
-                <SelectTrigger id="sortOrder">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="desc">Descendente</SelectItem>
-                  <SelectItem value="asc">Ascendente</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div>
-              <Label htmlFor="montoMin">Monto Mínimo</Label>
-              <Input
-                id="montoMin"
-                type="number"
-                placeholder="0"
-                value={montoMin}
-                onChange={(e) => setMontoMin(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="montoMax">Monto Máximo</Label>
-              <Input
-                id="montoMax"
-                type="number"
-                placeholder="Sin límite"
-                value={montoMax}
-                onChange={(e) => setMontoMax(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="citasMin">Citas Mínimas</Label>
-              <Input
-                id="citasMin"
-                type="number"
-                placeholder="0"
-                value={citasMin}
-                onChange={(e) => setCitasMin(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="citasMax">Citas Máximas</Label>
-              <Input
-                id="citasMax"
-                type="number"
-                placeholder="Sin límite"
-                value={citasMax}
-                onChange={(e) => setCitasMax(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="conEmail">Email</Label>
-              <Select value={conEmail} onValueChange={setConEmail}>
-                <SelectTrigger id="conEmail">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="todos">Todos</SelectItem>
-                  <SelectItem value="true">Con Email</SelectItem>
-                  <SelectItem value="false">Sin Email</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            <p className="text-sm text-muted-foreground md:w-auto">
+              Orden: mayor a menor por total gastado (MXN)
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -347,13 +307,13 @@ export default function GastoClientes() {
         <CardHeader>
           <CardTitle>Resultados</CardTitle>
           <CardDescription>
-            Mostrando {response?.data?.length || 0} de {totalClientes} clientes
+            Mostrando {rankingRows.length} de {response?.pagination?.total || 0} clientes
           </CardDescription>
         </CardHeader>
         <CardContent>
           {isLoading ? (
             <div className="text-center py-8">Cargando datos...</div>
-          ) : !response?.data || response.data.length === 0 ? (
+          ) : !hasRows ? (
             <div className="text-center py-8 text-muted-foreground">
               No hay datos disponibles. Importa un archivo CSV para comenzar.
             </div>
@@ -363,31 +323,38 @@ export default function GastoClientes() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-16">Pos.</TableHead>
                       <TableHead>Cliente</TableHead>
-                      <TableHead>Email</TableHead>
                       <TableHead>Teléfono</TableHead>
-                      <TableHead className="text-right">Citas Periodo</TableHead>
-                      <TableHead className="text-right">Valor Citas</TableHead>
-                      <TableHead className="text-right">Servicios</TableHead>
-                      <TableHead className="text-right">Productos</TableHead>
-                      <TableHead className="text-right">Descuentos</TableHead>
-                      <TableHead className="text-right">Monto Final</TableHead>
+                      <TableHead className="text-right">Visitas</TableHead>
+                      <TableHead className="text-right">Total gastado</TableHead>
+                      <TableHead className="text-center">Segmento</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {response.data.map((cliente: GastoCliente) => (
+                    {rankingRows.map((cliente) => {
+                      const tier = getTier(cliente);
+                      const visitas = cliente.cantidad_citas || cliente.visitas_registradas || cliente.cantidad_citas_periodo || 0;
+                      return (
                       <TableRow key={cliente.id}>
-                        <TableCell className="font-medium">{cliente.cliente}</TableCell>
-                        <TableCell>{cliente.email || '-'}</TableCell>
+                        <TableCell className="font-semibold">#{cliente.posicion}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <Avatar className="h-8 w-8">
+                              <AvatarFallback>{getInitials(cliente.cliente)}</AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <p className="font-medium leading-none">{cliente.cliente}</p>
+                              <p className="text-xs text-muted-foreground">{cliente.email || "Sin email"}</p>
+                            </div>
+                          </div>
+                        </TableCell>
                         <TableCell>{cliente.telefono || '-'}</TableCell>
-                        <TableCell className="text-right">{cliente.cantidad_citas_periodo}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(cliente.valor_citas_periodo_mxn)}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(cliente.monto_servicios_facturados_periodo_mxn)}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(cliente.monto_productos_facturados_mxn)}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(cliente.descuento_periodo_mxn)}</TableCell>
+                        <TableCell className="text-right">{visitas}</TableCell>
                         <TableCell className="text-right font-bold">{formatCurrency(cliente.monto_facturado_final_mxn)}</TableCell>
+                        <TableCell className="text-center">{getTierBadge(tier)}</TableCell>
                       </TableRow>
-                    ))}
+                    )})}
                   </TableBody>
                 </Table>
               </div>
@@ -395,7 +362,7 @@ export default function GastoClientes() {
               {/* Paginación */}
               <div className="flex items-center justify-between">
                 <div className="text-sm text-muted-foreground">
-                  Página {page} de {response.pagination.totalPages}
+                  Página {page} de {response?.pagination?.totalPages || 1}
                 </div>
                 <div className="flex gap-2">
                   <Button
@@ -410,7 +377,7 @@ export default function GastoClientes() {
                     variant="outline"
                     size="sm"
                     onClick={() => setPage(p => p + 1)}
-                    disabled={page >= response.pagination.totalPages}
+                    disabled={page >= (response?.pagination?.totalPages || 1)}
                   >
                     Siguiente
                   </Button>
