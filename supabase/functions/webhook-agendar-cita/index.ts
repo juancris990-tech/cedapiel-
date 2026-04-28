@@ -65,7 +65,7 @@ serve(async (req) => {
     console.log("📊 Estado actual:", estadoActual);
 
     // Construir contexto para la IA
-    const systemPrompt = `Eres un asistente virtual de una clínica de belleza. Tu trabajo es ayudar a los clientes a agendar citas.
+    const systemPrompt = `Eres un asistente virtual de una clínica de belleza. Tu trabajo es ayudar a los clientes a gestionar sus citas (agendar, reagendar o cancelar).
 
 INFORMACIÓN IMPORTANTE:
 - Horarios disponibles: Lunes a Viernes 9:00-18:00, Sábados 9:00-14:00
@@ -75,16 +75,37 @@ INFORMACIÓN IMPORTANTE:
 HERRAMIENTAS DISPONIBLES:
 1. consultar_horarios_disponibles: Para ver horarios disponibles en una fecha
 2. buscar_o_crear_cliente: Para registrar o encontrar al cliente
-3. crear_cita: Para confirmar y crear la cita
+3. crear_cita: Para confirmar y crear una cita nueva
+4. buscar_cita_cliente: Para buscar citas activas de un cliente por teléfono
+5. reagendar_cita: Para cambiar fecha/hora de una cita existente (queda confirmada)
+6. cancelar_cita: Para cancelar una cita existente y guardar motivo en notas
 
-FLUJO DE CONVERSACIÓN:
-1. Saluda amablemente y pregunta en qué puedes ayudar
-2. Identifica qué servicio desea
-3. Pregunta qué día prefiere
-4. Consulta horarios disponibles con la herramienta
-5. Confirma nombre completo y correo
-6. Crea la cita con la herramienta
-7. Confirma los detalles al cliente
+FLUJOS DE CONVERSACIÓN:
+1) AGENDAR NUEVA CITA
+   - Identifica servicio, fecha y horario deseado
+   - Consulta disponibilidad con consultar_horarios_disponibles
+   - Confirma nombre/correo y busca o crea cliente
+   - Crea la cita con crear_cita
+   - Confirma resumen final al cliente
+
+2) REAGENDAR CITA EXISTENTE
+   - Solicita teléfono del cliente si falta
+   - Busca sus citas activas con buscar_cita_cliente
+   - Si hay varias, pide que elija una (por id, fecha u hora)
+   - Solicita nueva fecha/hora y ejecuta reagendar_cita
+   - Confirma reagendamiento con el nuevo horario
+
+3) CANCELAR CITA
+   - Solicita teléfono del cliente si falta
+   - Busca citas activas con buscar_cita_cliente
+   - Si hay varias, pide seleccionar cuál cancelar
+   - Solicita motivo de cancelación
+   - Ejecuta cancelar_cita y confirma que quedó cancelada
+
+REGLAS:
+- Antes de reagendar o cancelar, siempre identifica una cita específica.
+- Si faltan datos para ejecutar una herramienta, pídelo al cliente de forma clara.
+- Usa respuestas breves, amables y orientadas a la acción.
 
 Estado actual de la conversación: ${JSON.stringify(estadoActual)}`;
 
@@ -158,6 +179,57 @@ Estado actual de la conversación: ${JSON.stringify(estadoActual)}`;
                   duracion_minutos: { type: "number", description: "Duración en minutos" },
                 },
                 required: ["id_cliente", "id_empleado", "id_servicio", "fecha", "hora_inicio", "duracion_minutos"],
+              },
+            },
+          },
+          {
+            type: "function",
+            function: {
+              name: "buscar_cita_cliente",
+              description: "Busca citas activas (pendiente o confirmada) de un cliente por teléfono",
+              parameters: {
+                type: "object",
+                properties: {
+                  telefono: {
+                    type: "string",
+                    description: "Teléfono del cliente",
+                  },
+                },
+                required: ["telefono"],
+              },
+            },
+          },
+          {
+            type: "function",
+            function: {
+              name: "reagendar_cita",
+              description: "Reagenda una cita existente cambiando fecha/hora y estado a confirmada",
+              parameters: {
+                type: "object",
+                properties: {
+                  cita_id: { type: "number", description: "ID de la cita a reagendar" },
+                  nueva_fecha: { type: "string", description: "Nueva fecha en formato YYYY-MM-DD" },
+                  nueva_hora: { type: "string", description: "Nueva hora en formato HH:MM:SS" },
+                },
+                required: ["cita_id", "nueva_fecha", "nueva_hora"],
+              },
+            },
+          },
+          {
+            type: "function",
+            function: {
+              name: "cancelar_cita",
+              description: "Cancela una cita y guarda el motivo en notas",
+              parameters: {
+                type: "object",
+                properties: {
+                  cita_id: { type: "number", description: "ID de la cita a cancelar" },
+                  motivo_cancelacion: {
+                    type: "string",
+                    description: "Motivo de cancelación proporcionado por el cliente",
+                  },
+                },
+                required: ["cita_id", "motivo_cancelacion"],
               },
             },
           },
@@ -284,6 +356,91 @@ Estado actual de la conversación: ${JSON.stringify(estadoActual)}`;
             });
           } else {
             console.error("❌ Error creando cita:", citaData);
+          }
+        } else if (functionName === "buscar_cita_cliente") {
+          const { telefono } = functionArgs;
+
+          const { data: citasCliente, error: citasError } = await supabase
+            .from("agendas")
+            .select(`
+              id,
+              fecha,
+              hora_inicio,
+              estado,
+              clientes!inner(telefono),
+              servicios(nombre),
+              empleados(nombre)
+            `)
+            .eq("clientes.telefono", telefono)
+            .in("estado", ["pendiente", "confirmada"])
+            .order("fecha", { ascending: true })
+            .order("hora_inicio", { ascending: true });
+
+          if (citasError) {
+            console.error("❌ Error buscando citas del cliente:", citasError);
+          } else {
+            const citasNormalizadas = (citasCliente || []).map((cita: any) => ({
+              id: cita.id,
+              fecha: cita.fecha,
+              hora: cita.hora_inicio,
+              estado: cita.estado,
+              servicio: cita.servicios?.nombre || null,
+              empleado: cita.empleados?.nombre || null,
+            }));
+
+            (estadoActual as any).citas_cliente = citasNormalizadas;
+            estadoActual.telefono = telefono;
+            console.log("✅ Citas activas encontradas:", citasNormalizadas.length);
+          }
+        } else if (functionName === "reagendar_cita") {
+          const { cita_id, nueva_fecha, nueva_hora } = functionArgs;
+
+          const { data: citaActualizada, error: reagendarError } = await supabase
+            .from("agendas")
+            .update({
+              fecha: nueva_fecha,
+              hora_inicio: nueva_hora,
+              estado: "confirmada",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", cita_id)
+            .select("id, fecha, hora_inicio, estado")
+            .maybeSingle();
+
+          if (reagendarError) {
+            console.error("❌ Error reagendando cita:", reagendarError);
+          } else {
+            (estadoActual as any).ultima_cita_reagendada = {
+              id: citaActualizada?.id || cita_id,
+              fecha: citaActualizada?.fecha || nueva_fecha,
+              hora: citaActualizada?.hora_inicio || nueva_hora,
+              estado: citaActualizada?.estado || "confirmada",
+            };
+            console.log("✅ Cita reagendada:", citaActualizada?.id || cita_id);
+          }
+        } else if (functionName === "cancelar_cita") {
+          const { cita_id, motivo_cancelacion } = functionArgs;
+
+          const { data: citaCancelada, error: cancelarError } = await supabase
+            .from("agendas")
+            .update({
+              estado: "cancelada",
+              notas: motivo_cancelacion,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", cita_id)
+            .select("id, estado, notas")
+            .maybeSingle();
+
+          if (cancelarError) {
+            console.error("❌ Error cancelando cita:", cancelarError);
+          } else {
+            (estadoActual as any).ultima_cita_cancelada = {
+              id: citaCancelada?.id || cita_id,
+              estado: citaCancelada?.estado || "cancelada",
+              motivo_cancelacion: citaCancelada?.notas || motivo_cancelacion,
+            };
+            console.log("✅ Cita cancelada:", citaCancelada?.id || cita_id);
           }
         }
       }
