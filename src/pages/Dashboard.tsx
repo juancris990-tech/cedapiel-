@@ -6,6 +6,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -192,11 +193,16 @@ const Dashboard = () => {
     pendientes: summary.total ? Math.round((summary.pendientes / summary.total) * 100) : 0,
     canceladas: summary.total ? Math.round((summary.canceladas / summary.total) * 100) : 0,
   };
+  const tasaAsistencia = pct.completadas;
+  const hoyIndex = (() => {
+    const day = new Date().getDay();
+    return day === 0 ? 6 : day - 1;
+  })();
 
   const quickActions = [
-    { to: "/agenda", label: "Abrir agenda", icon: Calendar },
-    { to: "/pos", label: "Registrar venta", icon: DollarSign },
-    { to: "/clientes", label: "Ver clientes", icon: Users },
+    { to: "/agenda", label: "Nueva Cita", icon: Calendar },
+    { to: "/clientes", label: "Nuevo Cliente", icon: Users },
+    { to: "/ventas", label: "Nueva Venta", icon: DollarSign },
     { to: "/reportes", label: "Ver reportes", icon: FileText },
   ];
 
@@ -260,10 +266,49 @@ const Dashboard = () => {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
+        <Card>
           <CardHeader>
-            <CardTitle>Citas por día de semana</CardTitle>
-            <CardDescription>Mini gráfico semanal de carga de agenda</CardDescription>
+            <CardTitle>Resumen de hoy</CardTitle>
+            <CardDescription>Citas completadas, pendientes y canceladas</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Completadas</p>
+                <p className="text-2xl font-semibold">{summary.completadas}</p>
+                <p className="text-xs text-muted-foreground">{pct.completadas}% del día</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Pendientes</p>
+                <p className="text-2xl font-semibold">{summary.pendientes}</p>
+                <p className="text-xs text-muted-foreground">{pct.pendientes}% del día</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Canceladas</p>
+                <p className="text-2xl font-semibold">{summary.canceladas}</p>
+                <p className="text-xs text-muted-foreground">{pct.canceladas}% del día</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Tasa de asistencia</span>
+                <span>{summary.total} citas totales</span>
+              </div>
+              <Progress value={tasaAsistencia} className="h-2" />
+              <div className="flex flex-wrap gap-2 text-xs">
+                <Badge variant="outline">Asistencia: {tasaAsistencia}%</Badge>
+                <Badge variant="outline">Pendientes: {pct.pendientes}%</Badge>
+                <Badge variant="outline">Canceladas: {pct.canceladas}%</Badge>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Citas esta semana</CardTitle>
+            <CardDescription>Mini gráfico de barras Lun-Dom</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={220}>
@@ -279,7 +324,14 @@ const Dashboard = () => {
                     borderRadius: "var(--radius)",
                   }}
                 />
-                <Bar dataKey="citas" fill="hsl(var(--primary))" radius={[8, 8, 0, 0]} maxBarSize={32} />
+                <Bar dataKey="citas" radius={[8, 8, 0, 0]} maxBarSize={28}>
+                  {(stats?.citasPorDiaSemana ?? []).map((entry, index) => (
+                    <Cell
+                      key={`cell-${entry.dia}`}
+                      fill={index === hoyIndex ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.35)"}
+                    />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -302,45 +354,6 @@ const Dashboard = () => {
           </CardContent>
         </Card>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Resumen del día</CardTitle>
-          <CardDescription>Completadas, pendientes y canceladas con distribución porcentual</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="rounded-lg border p-3">
-              <p className="text-xs text-muted-foreground">Completadas</p>
-              <p className="text-2xl font-semibold">{summary.completadas}</p>
-              <p className="text-xs text-muted-foreground">{pct.completadas}% del día</p>
-            </div>
-            <div className="rounded-lg border p-3">
-              <p className="text-xs text-muted-foreground">Pendientes</p>
-              <p className="text-2xl font-semibold">{summary.pendientes}</p>
-              <p className="text-xs text-muted-foreground">{pct.pendientes}% del día</p>
-            </div>
-            <div className="rounded-lg border p-3">
-              <p className="text-xs text-muted-foreground">Canceladas</p>
-              <p className="text-2xl font-semibold">{summary.canceladas}</p>
-              <p className="text-xs text-muted-foreground">{pct.canceladas}% del día</p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Avance operativo del día</span>
-              <span>{summary.total} citas totales</span>
-            </div>
-            <Progress value={pct.completadas} className="h-2" />
-            <div className="flex flex-wrap gap-2 text-xs">
-              <Badge variant="outline">Completadas: {pct.completadas}%</Badge>
-              <Badge variant="outline">Pendientes: {pct.pendientes}%</Badge>
-              <Badge variant="outline">Canceladas: {pct.canceladas}%</Badge>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 };
