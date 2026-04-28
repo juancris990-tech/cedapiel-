@@ -18,6 +18,8 @@ import { Badge } from "@/components/ui/badge";
 import { Mail, Phone, Tag, Calendar } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
+type EstadoCampania = "Activa" | "Pausada" | "Finalizada";
+
 interface Lead {
   id: number;
   nombre: string;
@@ -36,6 +38,19 @@ interface Lead {
   }>;
 }
 
+interface Campania {
+  id: number;
+  nombre: string;
+  estado: string | null;
+  created_at: string;
+}
+
+interface MensajeEnviado {
+  id: number;
+  id_campania: number | null;
+  fecha_envio: string;
+}
+
 const PIPELINE_STAGES = [
   { id: "lead_nuevo", label: "Nuevo Lead", color: "bg-blue-500" },
   { id: "contactado", label: "Contactado", color: "bg-purple-500" },
@@ -49,6 +64,8 @@ const CRM = () => {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [campanias, setCampanias] = useState<Campania[]>([]);
+  const [mensajes, setMensajes] = useState<MensajeEnviado[]>([]);
   const { toast } = useToast();
 
   const sensors = useSensors(
@@ -66,22 +83,41 @@ const CRM = () => {
   const fetchLeads = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from("leads")
-        .select(`
-          *,
-          lead_tags (
-            tag_id,
-            tags (
-              nombre,
-              color
+      const [leadsResponse, campaniasResponse, mensajesResponse] = await Promise.all([
+        supabase
+          .from("leads")
+          .select(`
+            *,
+            lead_tags (
+              tag_id,
+              tags (
+                nombre,
+                color
+              )
             )
-          )
-        `)
-        .order("created_at", { ascending: false });
+          `)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("campanias_marketing")
+          .select("id, nombre, estado, created_at")
+          .order("created_at", { ascending: false })
+          .limit(10),
+        supabase
+          .from("mensajes_enviados")
+          .select("id, id_campania, fecha_envio")
+          .order("fecha_envio", { ascending: false }),
+      ]);
+
+      const { data, error } = leadsResponse;
 
       if (error) throw error;
+
+      if (campaniasResponse.error) throw campaniasResponse.error;
+      if (mensajesResponse.error) throw mensajesResponse.error;
+
       setLeads(data || []);
+      setCampanias((campaniasResponse.data || []) as Campania[]);
+      setMensajes((mensajesResponse.data || []) as MensajeEnviado[]);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -156,6 +192,48 @@ const CRM = () => {
     return leads.filter((lead) => lead.pipeline_stage === stageId);
   };
 
+  const normalizeCampaniaEstado = (estado?: string | null): EstadoCampania => {
+    if (!estado) return "Pausada";
+    if (estado === "Activa") return "Activa";
+    if (estado === "Completada") return "Finalizada";
+    if (estado === "Cancelada") return "Finalizada";
+    return "Pausada";
+  };
+
+  const getEstadoCampaniaBadgeClass = (estado: EstadoCampania) => {
+    if (estado === "Activa") {
+      return "bg-emerald-100 text-emerald-700 border-emerald-300";
+    }
+    if (estado === "Pausada") {
+      return "bg-amber-100 text-amber-700 border-amber-300";
+    }
+    return "bg-slate-100 text-slate-700 border-slate-300";
+  };
+
+  const contactosPorCampania = mensajes.reduce<Map<number, number>>((acc, mensaje) => {
+    if (!mensaje.id_campania) return acc;
+    acc.set(mensaje.id_campania, (acc.get(mensaje.id_campania) || 0) + 1);
+    return acc;
+  }, new Map());
+
+  const fechaEnvioPorCampania = mensajes.reduce<Map<number, string>>((acc, mensaje) => {
+    if (!mensaje.id_campania) return acc;
+    const fechaActual = acc.get(mensaje.id_campania);
+    if (!fechaActual || new Date(mensaje.fecha_envio) > new Date(fechaActual)) {
+      acc.set(mensaje.id_campania, mensaje.fecha_envio);
+    }
+    return acc;
+  }, new Map());
+
+  const totalLeadsActivos = leads.filter((lead) => lead.pipeline_stage !== "perdido").length;
+  const campaniasActivas = campanias.filter((campania) => normalizeCampaniaEstado(campania.estado) === "Activa").length;
+  const leadsConvertidos = leads.filter((lead) => lead.pipeline_stage === "cliente_activo").length;
+  const tasaConversion = leads.length > 0
+    ? ((leadsConvertidos / leads.length) * 100).toFixed(1)
+    : "0.0";
+
+  const campaniasRecientes = campanias.slice(0, 5);
+
   const activeLead = leads.find((l) => l.id === activeId);
 
   if (loading) {
@@ -178,6 +256,38 @@ const CRM = () => {
           </p>
         </div>
 
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Total leads activos</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold">{totalLeadsActivos}</div>
+              <p className="text-xs text-muted-foreground mt-1">Excluye leads perdidos</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Campañas activas</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold">{campaniasActivas}</div>
+              <p className="text-xs text-muted-foreground mt-1">Estado normalizado a Activa/Pausada/Finalizada</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Tasa de conversión</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold">{tasaConversion}%</div>
+              <p className="text-xs text-muted-foreground mt-1">Leads a cliente activo / total leads × 100</p>
+            </CardContent>
+          </Card>
+        </div>
+
         <DndContext
           sensors={sensors}
           onDragStart={handleDragStart}
@@ -197,6 +307,51 @@ const CRM = () => {
             {activeLead ? <LeadCard lead={activeLead} isDragging /> : null}
           </DragOverlay>
         </DndContext>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Campañas recientes</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {campaniasRecientes.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No hay campañas recientes</p>
+            ) : (
+              <div className="space-y-3">
+                {campaniasRecientes.map((campania) => {
+                  const estado = normalizeCampaniaEstado(campania.estado);
+                  const contactos = contactosPorCampania.get(campania.id) || 0;
+                  const fechaEnvio = fechaEnvioPorCampania.get(campania.id);
+
+                  return (
+                    <div
+                      key={campania.id}
+                      className="flex flex-col gap-2 rounded-lg border p-3 md:flex-row md:items-center md:justify-between"
+                    >
+                      <div>
+                        <p className="font-medium">{campania.nombre}</p>
+                        <p className="text-xs text-muted-foreground">{contactos} contactos</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Badge className={getEstadoCampaniaBadgeClass(estado)} variant="outline">
+                          {estado}
+                        </Badge>
+                        <span className="text-sm text-muted-foreground">
+                          {fechaEnvio
+                            ? new Date(fechaEnvio).toLocaleDateString("es-CL", {
+                                day: "2-digit",
+                                month: "short",
+                                year: "numeric",
+                              })
+                            : "Sin envío"}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </AppLayout>
   );
@@ -250,6 +405,41 @@ const LeadCard = ({ lead, isDragging = false }: LeadCardProps) => {
       }
     : undefined;
 
+  const daysSincePipelineEntry = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24))
+  );
+
+  const daysWithoutActivity = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(lead.updated_at).getTime()) / (1000 * 60 * 60 * 24))
+  );
+
+  const getTemperature = (days: number) => {
+    if (days > 7) {
+      return {
+        label: "Frío",
+        className: "bg-blue-100 text-blue-700 border-blue-300",
+      };
+    }
+
+    if (days >= 3) {
+      return {
+        label: "Tibio",
+        className: "bg-yellow-100 text-yellow-700 border-yellow-300",
+      };
+    }
+
+    return {
+      label: "Caliente",
+      className: "bg-red-100 text-red-700 border-red-300",
+    };
+  };
+
+  const temperature = getTemperature(daysWithoutActivity);
+  const servicioInteres =
+    lead.lead_tags?.[0]?.tags?.nombre || lead.canal_origen || "No definido";
+
   return (
     <div ref={setNodeRef} style={style} {...listeners} {...attributes}>
       <Card
@@ -261,18 +451,40 @@ const LeadCard = ({ lead, isDragging = false }: LeadCardProps) => {
           <CardTitle className="text-sm font-medium">{lead.nombre}</CardTitle>
         </CardHeader>
         <CardContent className="p-3 pt-0 space-y-2">
-          {lead.email && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Mail className="h-3 w-3" />
-              <span className="truncate">{lead.email}</span>
-            </div>
-          )}
           {lead.telefono && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Phone className="h-3 w-3" />
               <span>{lead.telefono}</span>
             </div>
           )}
+          {!lead.telefono && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Phone className="h-3 w-3" />
+              <span>Sin teléfono</span>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Tag className="h-3 w-3" />
+            <span className="truncate">Servicio interés: {servicioInteres}</span>
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground">
+              {daysSincePipelineEntry} día{daysSincePipelineEntry === 1 ? "" : "s"} en pipeline
+            </span>
+            <Badge variant="outline" className={temperature.className}>
+              {temperature.label}
+            </Badge>
+          </div>
+
+          {lead.email && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Mail className="h-3 w-3" />
+              <span className="truncate">{lead.email}</span>
+            </div>
+          )}
+
           {lead.canal_origen && (
             <div className="flex items-center gap-2 text-xs">
               <Badge variant="outline" className="text-xs">
