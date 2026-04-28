@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Activity } from "lucide-react";
+import { Activity, Zap } from "lucide-react";
 
 const Auth = () => {
   const navigate = useNavigate();
@@ -21,15 +21,12 @@ const Auth = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
         email: loginEmail,
         password: loginPassword,
       });
-
       if (error) throw error;
-
       if (data.session) {
         toast.success("¡Bienvenido!");
         navigate("/dashboard");
@@ -44,7 +41,6 @@ const Auth = () => {
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-
     try {
       const { data, error } = await supabase.auth.signUp({
         email: signupEmail,
@@ -56,9 +52,7 @@ const Auth = () => {
           emailRedirectTo: `${window.location.origin}/dashboard`,
         },
       });
-
       if (error) throw error;
-
       if (data.user) {
         toast.success("¡Cuenta creada exitosamente!");
         navigate("/dashboard");
@@ -68,6 +62,12 @@ const Auth = () => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleDemoMode = () => {
+    localStorage.setItem("demo_mode", "true");
+    toast.success("Entrando en Modo Demo...");
+    navigate("/dashboard");
   };
 
   return (
@@ -80,21 +80,22 @@ const Auth = () => {
           <h1 className="text-3xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
             Cedapiel
           </h1>
-          <p className="text-muted-foreground mt-2">Sistema Clínico Integral</p>
+          <p className="text-muted-foreground mt-1">Sistema Clínico Integral</p>
         </div>
 
-        <Card className="shadow-lg border-border/50">
+        <Card>
           <CardHeader>
             <CardTitle>Acceso al Sistema</CardTitle>
             <CardDescription>Ingresa con tu cuenta o regístrate</CardDescription>
           </CardHeader>
           <CardContent>
-            <Tabs defaultValue="login" className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="login">Iniciar Sesión</TabsTrigger>
-                <TabsTrigger value="signup">Registrarse</TabsTrigger>
+            <Tabs defaultValue="login">
+              <TabsList className="w-full mb-4">
+                <TabsTrigger value="login" className="flex-1">Iniciar Sesión</TabsTrigger>
+                <TabsTrigger value="signup" className="flex-1">Registrarse</TabsTrigger>
               </TabsList>
 
+              {/* LOGIN */}
               <TabsContent value="login">
                 <form onSubmit={handleLogin} className="space-y-4">
                   <div className="space-y-2">
@@ -123,8 +124,19 @@ const Auth = () => {
                     {isLoading ? "Iniciando sesión..." : "Iniciar Sesión"}
                   </Button>
                 </form>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full gap-2 mt-4"
+                  onClick={handleDemoMode}
+                >
+                  <Zap className="h-4 w-4" />
+                  Entrar en Modo Demo
+                </Button>
               </TabsContent>
 
+              {/* SIGNUP */}
               <TabsContent value="signup">
                 <form onSubmit={handleSignup} className="space-y-4">
                   <div className="space-y-2">
@@ -132,7 +144,7 @@ const Auth = () => {
                     <Input
                       id="signup-name"
                       type="text"
-                      placeholder="Juan Pérez"
+                      placeholder="Tu nombre"
                       value={signupName}
                       onChange={(e) => setSignupName(e.target.value)}
                       required
@@ -167,6 +179,7 @@ const Auth = () => {
                 </form>
               </TabsContent>
             </Tabs>
+
           </CardContent>
         </Card>
       </div>
