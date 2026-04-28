@@ -3,14 +3,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
@@ -35,7 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Search, MoreHorizontal, Pencil, Trash2, Loader2, Clock } from "lucide-react";
+import { Plus, Search, MoreHorizontal, Pencil, Trash2, Loader2, Clock3, CircleDollarSign } from "lucide-react";
 import { toast } from "sonner";
 import { ServicioDialog } from "./ServicioDialog";
 
@@ -149,11 +141,43 @@ export const ServiciosPanel = () => {
     }).format(value);
   };
 
+  const getCategoryBadgeClass = (categoria?: string | null) => {
+    if (!categoria) {
+      return "bg-muted text-muted-foreground border-border";
+    }
+
+    const palette = [
+      "bg-blue-100 text-blue-800 border-blue-200",
+      "bg-violet-100 text-violet-800 border-violet-200",
+      "bg-emerald-100 text-emerald-800 border-emerald-200",
+      "bg-amber-100 text-amber-800 border-amber-200",
+      "bg-rose-100 text-rose-800 border-rose-200",
+      "bg-cyan-100 text-cyan-800 border-cyan-200",
+    ];
+
+    const index = categoria
+      .split("")
+      .reduce((acc, char) => acc + char.charCodeAt(0), 0) % palette.length;
+
+    return palette[index];
+  };
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-4">
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 rounded-xl border bg-card p-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h3 className="text-lg font-semibold">Servicios</h3>
+          <p className="text-sm text-muted-foreground">Explora y administra tu catálogo con vista tipo cards</p>
+        </div>
+        <Button onClick={handleNew} size="lg" className="h-11 px-6 font-semibold shadow-sm">
+          <Plus className="h-4 w-4 mr-2" />
+          Nuevo Servicio
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[220px] max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Buscar servicio..."
             value={search}
@@ -162,7 +186,7 @@ export const ServiciosPanel = () => {
           />
         </div>
         <Select value={filterCategoria} onValueChange={setFilterCategoria}>
-          <SelectTrigger className="w-[180px]">
+          <SelectTrigger className="w-[220px]">
             <SelectValue placeholder="Categoría" />
           </SelectTrigger>
           <SelectContent>
@@ -184,101 +208,87 @@ export const ServiciosPanel = () => {
             <SelectItem value="inactivo">Inactivos</SelectItem>
           </SelectContent>
         </Select>
-        <Button onClick={handleNew} className="ml-auto">
-          <Plus className="h-4 w-4 mr-2" />
-          Nuevo Servicio
-        </Button>
       </div>
 
-      <div className="border rounded-lg">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Nombre</TableHead>
-              <TableHead>Categoría</TableHead>
-              <TableHead>Precio</TableHead>
-              <TableHead>Duración</TableHead>
-              <TableHead>Estado</TableHead>
-              <TableHead className="w-[80px]">Acciones</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin mx-auto" />
-                </TableCell>
-              </TableRow>
-            ) : filteredServicios.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                  No se encontraron servicios
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredServicios.map((servicio: Servicio) => (
-                <TableRow key={servicio.id}>
-                  <TableCell>
-                    <div>
-                      <p className="font-medium">{servicio.nombre}</p>
-                      {servicio.descripcion && (
-                        <p className="text-sm text-muted-foreground line-clamp-1">
-                          {servicio.descripcion}
-                        </p>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    {servicio.categoria_servicio?.nombre || (
-                      <span className="text-muted-foreground">-</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="font-medium">
+      {isLoading ? (
+        <div className="rounded-lg border py-12">
+          <Loader2 className="mx-auto h-6 w-6 animate-spin" />
+        </div>
+      ) : filteredServicios.length === 0 ? (
+        <div className="rounded-lg border py-12 text-center text-muted-foreground">
+          No se encontraron servicios
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {filteredServicios.map((servicio: Servicio) => (
+            <div
+              key={servicio.id}
+              className="group rounded-2xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+            >
+              <div className="mb-4 flex items-start justify-between gap-2">
+                <div className="space-y-2">
+                  <h4 className="line-clamp-2 text-base font-semibold leading-tight">{servicio.nombre}</h4>
+                  <Badge
+                    className={`border font-medium ${getCategoryBadgeClass(servicio.categoria_servicio?.nombre)}`}
+                    variant="outline"
+                  >
+                    {servicio.categoria_servicio?.nombre || "Sin categoría"}
+                  </Badge>
+                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => handleEdit(servicio)}>
+                      <Pencil className="h-4 w-4 mr-2" />
+                      Editar
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => handleDelete(servicio)}
+                      className="text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Eliminar
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Clock3 className="h-4 w-4" />
+                    Duración
+                  </div>
+                  <span className="text-sm font-semibold text-foreground">
+                    {servicio.duracion_minutos ? `${servicio.duracion_minutos} min` : "-"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <CircleDollarSign className="h-4 w-4" />
+                    Precio
+                  </div>
+                  <span className="text-sm font-semibold text-foreground">
                     {formatCurrency(servicio.precio)}
-                  </TableCell>
-                  <TableCell>
-                    {servicio.duracion_minutos ? (
-                      <div className="flex items-center gap-1 text-muted-foreground">
-                        <Clock className="h-3 w-3" />
-                        {servicio.duracion_minutos} min
-                      </div>
-                    ) : (
-                      <span className="text-muted-foreground">-</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={servicio.activo ? "default" : "secondary"}>
-                      {servicio.activo ? "Activo" : "Inactivo"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleEdit(servicio)}>
-                          <Pencil className="h-4 w-4 mr-2" />
-                          Editar
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => handleDelete(servicio)}
-                          className="text-destructive"
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Eliminar
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Estado</span>
+                  <Badge variant={servicio.activo ? "default" : "secondary"}>
+                    {servicio.activo ? "Activo" : "Inactivo"}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <ServicioDialog
         open={dialogOpen}
