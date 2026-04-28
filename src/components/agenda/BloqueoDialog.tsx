@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,14 @@ interface BloqueoDialogProps {
   sucursales: Array<{ id: number; nombre: string }>;
   empleados: Array<{ id: number; nombre: string; apellidos: string }>;
   defaultDate?: Date;
+  initialValues?: {
+    id_sucursal?: string;
+    id_empleado?: string;
+    fecha?: string;
+    hora_inicio?: string;
+    hora_fin?: string;
+    motivo?: string;
+  };
 }
 
 export function BloqueoDialog({
@@ -37,17 +45,27 @@ export function BloqueoDialog({
   sucursales,
   empleados,
   defaultDate,
+  initialValues,
 }: BloqueoDialogProps) {
   const queryClient = useQueryClient();
   const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    id_sucursal: "",
-    id_empleado: "all",
-    fecha: defaultDate ? format(defaultDate, "yyyy-MM-dd") : "",
-    hora_inicio: "",
-    hora_fin: "",
-    motivo: "",
+
+  const buildFormData = () => ({
+    id_sucursal: initialValues?.id_sucursal || "",
+    id_empleado: initialValues?.id_empleado || "all",
+    fecha: initialValues?.fecha || (defaultDate ? format(defaultDate, "yyyy-MM-dd") : ""),
+    hora_inicio: initialValues?.hora_inicio || "",
+    hora_fin: initialValues?.hora_fin || "",
+    motivo: initialValues?.motivo || "",
   });
+
+  const [formData, setFormData] = useState(buildFormData());
+
+  useEffect(() => {
+    if (open) {
+      setFormData(buildFormData());
+    }
+  }, [open, defaultDate, initialValues?.id_sucursal, initialValues?.id_empleado, initialValues?.fecha, initialValues?.hora_inicio, initialValues?.hora_fin, initialValues?.motivo]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,14 +90,7 @@ export function BloqueoDialog({
       toast.success("Bloqueo creado exitosamente");
       queryClient.invalidateQueries({ queryKey: ["bloqueos-agenda"] });
       onOpenChange(false);
-      setFormData({
-        id_sucursal: "",
-        id_empleado: "all",
-        fecha: "",
-        hora_inicio: "",
-        hora_fin: "",
-        motivo: "",
-      });
+      setFormData(buildFormData());
     } catch (error: any) {
       console.error("Error creating bloqueo:", error);
       toast.error(error.message || "Error al crear el bloqueo");

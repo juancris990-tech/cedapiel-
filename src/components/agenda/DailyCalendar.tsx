@@ -1,6 +1,7 @@
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Plus, Clock, ChevronsUpDown, CalendarClock } from "lucide-react";
-import { format, isSameDay } from "date-fns";
+import { format, isSameDay, isToday } from "date-fns";
 import { es } from "date-fns/locale";
 import { parseDateOnlyToLocal } from "@/lib/date";
 import { StatusBadgeSelector } from "./StatusBadgeSelector";
@@ -94,6 +95,7 @@ interface DailyCalendarProps {
   onAppointmentClick: (appointmentId: number | string) => void;
   onBloqueoClick: (bloqueoId: number) => void;
   onAddAppointment?: (professionalId: number, hour: number, minute?: number) => void;
+  onBlockTime?: (professionalId: number, hour: number, minute?: number) => void;
   onExtendAppointment?: (appointment: Appointment, minutes: number) => void;
   onStartReschedule?: (appointment: Appointment) => void;
 }
@@ -323,6 +325,7 @@ function ResizableAppointment({
   const horaInicio = apt.hora_inicio?.substring(0, 5) || "";
   const horaFin = apt.hora_fin?.substring(0, 5) || "";
   const precio = apt.servicios?.precio ? `$${apt.servicios.precio}` : "";
+  const employeeDisplayName = `${apt.empleados?.nombre || ""} ${apt.empleados?.apellidos || ""}`.trim() || professionalName;
 
   const parseTimeToMinutes = useCallback((time: string) => {
     const [hStr, mStr] = time.split(":");
@@ -497,8 +500,11 @@ function ResizableAppointment({
                   {apt.clientes?.nombre} {apt.clientes?.apellidos}
                 </p>
               </div>
+              <p className="text-[10px] font-medium text-foreground truncate">
+                Servicio: {apt.servicios?.nombre || "Sin servicio"} {precio && `(${precio})`}
+              </p>
               <p className="text-[10px] text-muted-foreground truncate">
-                {apt.servicios?.nombre} {precio && `(${precio})`}
+                Profesional: {employeeDisplayName}
               </p>
               <p className={`text-[10px] font-medium truncate ${isResizing ? 'text-primary' : 'text-muted-foreground'}`}>
                 {horaInicio} - {displayHoraFin} ({displayDuration} min)
@@ -705,6 +711,7 @@ function DroppableSlot({
   hasBloqueos,
   colorConfig,
   onSelectInterval,
+  onBlockTime,
   appointments,
   bloqueos,
 }: {
@@ -716,11 +723,13 @@ function DroppableSlot({
   hasBloqueos: boolean;
   colorConfig: { bg: string; border: string };
   onSelectInterval?: (minute: number) => void;
+  onBlockTime?: (minute: number) => void;
   appointments: Appointment[];
   bloqueos: Bloqueo[];
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   const [showIntervals, setShowIntervals] = useState(false);
+  const [showQuickMenu, setShowQuickMenu] = useState(false);
 
   // Check if there are any appointments in this slot
   const hasAppointments = appointments.length > 0;
@@ -741,9 +750,7 @@ function DroppableSlot({
   }, [isDraggingAppointment, isOver, canShowIntervals]);
 
   const handleMouseEnter = () => {
-    // Important: only show the 15-min selector on truly empty slots.
-    // Otherwise it overlays the appointment card and blocks resize/drag interactions.
-    if (canShowIntervals) {
+    if (isDraggingAppointment && canShowIntervals) {
       setShowIntervals(true);
     }
   };
@@ -755,6 +762,18 @@ function DroppableSlot({
   const handleIntervalSelect = (minute: number) => {
     onSelectInterval?.(minute);
     setShowIntervals(false);
+    setShowQuickMenu(false);
+  };
+
+  const handleSlotClick = (e: React.MouseEvent) => {
+    if (!canShowIntervals) return;
+    const target = e.target as HTMLElement;
+    const currentTarget = e.currentTarget as HTMLElement;
+
+    if (target === currentTarget || target.closest('[data-empty-overlay]')) {
+      e.stopPropagation();
+      setShowQuickMenu((prev) => !prev);
+    }
   };
 
   return (
@@ -762,6 +781,7 @@ function DroppableSlot({
       ref={setNodeRef}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onClick={handleSlotClick}
       className={`relative min-h-[110px] border border-border rounded-md p-1 transition-colors border-l-4 ${colorConfig.border} ${
         hasBloqueos
           ? "bg-muted/40 cursor-not-allowed"
@@ -771,7 +791,7 @@ function DroppableSlot({
       }`}
     >
       {/* Empty state with plus icon */}
-      {isEmpty && !showIntervals && (
+      {isEmpty && !showIntervals && !showQuickMenu && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <Plus className="h-4 w-4 text-muted-foreground/30" />
         </div>
@@ -791,6 +811,39 @@ function DroppableSlot({
           />
         </div>
       )}
+
+      {showQuickMenu && canShowIntervals && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-background/70 backdrop-blur-[1px] rounded-md">
+          <div className="w-[170px] rounded-md border bg-popover p-2 shadow-lg space-y-1">
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full justify-start h-8"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowQuickMenu(false);
+                onSelectInterval?.(0);
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Agendar cita
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full justify-start h-8"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowQuickMenu(false);
+                onBlockTime?.(0);
+              }}
+            >
+              <CalendarClock className="mr-2 h-4 w-4" />
+              Bloquear tiempo
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -805,12 +858,19 @@ export function DailyCalendar({
   onAppointmentClick,
   onBloqueoClick,
   onAddAppointment,
+  onBlockTime,
   onExtendAppointment,
   onStartReschedule,
 }: DailyCalendarProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [activeAppointment, setActiveAppointment] = useState<Appointment | null>(null);
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -995,6 +1055,13 @@ export function DailyCalendar({
   };
 
   const numProfessionals = professionals.length;
+  const WORK_START_HOUR = 8;
+  const SLOT_ROW_HEIGHT_PX = 114;
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const workStartMinutes = WORK_START_HOUR * 60;
+  const isTodayView = isToday(selectedDate);
+  const showCurrentTimeLine = isTodayView && nowMinutes >= workStartMinutes && nowMinutes <= 21 * 60;
+  const currentLineTop = ((nowMinutes - workStartMinutes) / 60) * SLOT_ROW_HEIGHT_PX;
 
   if (professionals.length === 0) {
     return (
@@ -1063,75 +1130,90 @@ export function DailyCalendar({
           </div>
 
           {/* Time slots grid */}
-          {HOURS.map((hour) => (
-            <div 
-              key={hour} 
-              className="grid gap-1 mb-1"
-              style={{ gridTemplateColumns: `80px repeat(${numProfessionals}, 1fr)` }}
-            >
-              <div className="text-sm text-muted-foreground font-medium pt-2">
-                {hour.toString().padStart(2, "0")}:00
+          <div className="relative">
+            {showCurrentTimeLine && (
+              <div
+                className="absolute left-[80px] right-0 z-20 pointer-events-none"
+                style={{ top: `${currentLineTop}px` }}
+              >
+                <div className="relative h-0">
+                  <div className="absolute -left-1 -top-1 h-2 w-2 rounded-full bg-red-500" />
+                  <div className="h-[2px] bg-red-500 w-full shadow-[0_0_8px_rgba(239,68,68,0.5)]" />
+                </div>
               </div>
-              {professionals.map((prof, profIndex) => {
-                const profAppointments = getAppointmentsForProfessionalAndHour(prof, hour);
-                const profBloqueos = getBloqueosForProfessionalAndHour(prof, hour);
-                const hasBloqueos = profBloqueos.length > 0;
-                const slotId = `slot-${prof.id}-${hour}`;
-                const colorConfig = getProfessionalColor(profIndex);
-                
-                return (
-                  <DroppableSlot 
-                    key={slotId} 
-                    id={slotId}
-                    professionalId={prof.id}
-                    hour={hour}
-                    isDraggingAppointment={!!activeAppointment}
-                    hasBloqueos={hasBloqueos} 
-                    colorConfig={colorConfig}
-                    onSelectInterval={(minute) => onAddAppointment?.(prof.id, hour, minute)}
-                    appointments={profAppointments}
-                    bloqueos={profBloqueos}
-                  >
-                    {hasBloqueos && profBloqueos.map((bloqueo) => (
-                      <div
-                        key={`bloqueo-${bloqueo.id}`}
-                        className="mb-1 p-1.5 rounded bg-destructive/10 border-l-4 border-l-destructive cursor-pointer hover:opacity-80 transition-colors"
-                        onClick={() => onBloqueoClick(bloqueo.id)}
-                      >
-                        <p className="text-xs font-medium text-destructive truncate">
-                          Bloqueado
-                        </p>
-                        <p className="text-[10px] text-muted-foreground truncate">
-                          {bloqueo.motivo || `${bloqueo.hora_inicio.substring(0,5)} - ${bloqueo.hora_fin.substring(0,5)}`}
-                        </p>
-                      </div>
-                    ))}
+            )}
 
-                    {profAppointments.map((apt) => {
-                      const professionalName = `${prof.nombre} ${prof.apellidos}`.trim();
-                      return (
-                        <ResizableAppointment
-                          key={apt.id}
-                          apt={apt}
-                          onAppointmentClick={onAppointmentClick}
-                          onGoToPOS={handleGoToPOS}
-                          onAddAppointment={() => onAddAppointment?.(prof.id, hour, 0)}
-                          onExtendAppointment={(minutes) => onExtendAppointment?.(apt, minutes)}
-                          onClientClick={(clientId) => navigate(`/clientes/${clientId}`)}
-                          onResizeEnd={handleResizeEnd}
-                          onStartReschedule={() => onStartReschedule?.(apt)}
-                          allAppointments={appointments}
-                          professionalName={professionalName}
-                          rescheduleMode={rescheduleMode}
-                          isBeingRescheduled={appointmentToReschedule?.id === apt.id}
-                        />
-                      );
-                    })}
-                  </DroppableSlot>
-                );
-              })}
-            </div>
-          ))}
+            {HOURS.map((hour) => (
+              <div
+                key={hour}
+                className="grid gap-1 mb-1"
+                style={{ gridTemplateColumns: `80px repeat(${numProfessionals}, 1fr)` }}
+              >
+                <div className="text-sm text-muted-foreground font-medium pt-2">
+                  {hour.toString().padStart(2, "0")}:00
+                </div>
+                {professionals.map((prof, profIndex) => {
+                  const profAppointments = getAppointmentsForProfessionalAndHour(prof, hour);
+                  const profBloqueos = getBloqueosForProfessionalAndHour(prof, hour);
+                  const hasBloqueos = profBloqueos.length > 0;
+                  const slotId = `slot-${prof.id}-${hour}`;
+                  const colorConfig = getProfessionalColor(profIndex);
+
+                  return (
+                    <DroppableSlot
+                      key={slotId}
+                      id={slotId}
+                      professionalId={prof.id}
+                      hour={hour}
+                      isDraggingAppointment={!!activeAppointment}
+                      hasBloqueos={hasBloqueos}
+                      colorConfig={colorConfig}
+                      onSelectInterval={(minute) => onAddAppointment?.(prof.id, hour, minute)}
+                      onBlockTime={(minute) => onBlockTime?.(prof.id, hour, minute)}
+                      appointments={profAppointments}
+                      bloqueos={profBloqueos}
+                    >
+                      {hasBloqueos && profBloqueos.map((bloqueo) => (
+                        <div
+                          key={`bloqueo-${bloqueo.id}`}
+                          className="mb-1 p-1.5 rounded bg-destructive/10 border-l-4 border-l-destructive cursor-pointer hover:opacity-80 transition-colors"
+                          onClick={() => onBloqueoClick(bloqueo.id)}
+                        >
+                          <p className="text-xs font-medium text-destructive truncate">
+                            Bloqueado
+                          </p>
+                          <p className="text-[10px] text-muted-foreground truncate">
+                            {bloqueo.motivo || `${bloqueo.hora_inicio.substring(0,5)} - ${bloqueo.hora_fin.substring(0,5)}`}
+                          </p>
+                        </div>
+                      ))}
+
+                      {profAppointments.map((apt) => {
+                        const professionalName = `${prof.nombre} ${prof.apellidos}`.trim();
+                        return (
+                          <ResizableAppointment
+                            key={apt.id}
+                            apt={apt}
+                            onAppointmentClick={onAppointmentClick}
+                            onGoToPOS={handleGoToPOS}
+                            onAddAppointment={() => onAddAppointment?.(prof.id, hour, 0)}
+                            onExtendAppointment={(minutes) => onExtendAppointment?.(apt, minutes)}
+                            onClientClick={(clientId) => navigate(`/clientes/${clientId}`)}
+                            onResizeEnd={handleResizeEnd}
+                            onStartReschedule={() => onStartReschedule?.(apt)}
+                            allAppointments={appointments}
+                            professionalName={professionalName}
+                            rescheduleMode={rescheduleMode}
+                            isBeingRescheduled={appointmentToReschedule?.id === apt.id}
+                          />
+                        );
+                      })}
+                    </DroppableSlot>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 

@@ -30,6 +30,15 @@ interface RescheduleAppointment {
   id_empleado: number;
 }
 
+interface BloqueoInitialValues {
+  id_sucursal?: string;
+  id_empleado?: string;
+  fecha?: string;
+  hora_inicio?: string;
+  hora_fin?: string;
+  motivo?: string;
+}
+
 const Agenda = () => {
   const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -38,6 +47,7 @@ const Agenda = () => {
   const [bloqueoDialogOpen, setBloqueoDialogOpen] = useState(false);
   const [selectedBloqueoId, setSelectedBloqueoId] = useState<number | null>(null);
   const [bloqueoDetailDialogOpen, setBloqueoDetailDialogOpen] = useState(false);
+  const [bloqueoInitialValues, setBloqueoInitialValues] = useState<BloqueoInitialValues>({});
   const [viewMode, setViewMode] = useState<"calendar" | "table">("calendar");
   const [viewRange, setViewRange] = useState<"day" | "week">("week");
 
@@ -448,6 +458,31 @@ const Agenda = () => {
     }
   };
 
+  const openQuickBloqueo = ({
+    professionalId,
+    hour,
+    minute = 0,
+    date,
+  }: {
+    professionalId: number;
+    hour: number;
+    minute?: number;
+    date: Date;
+  }) => {
+    const endTotalMinutes = hour * 60 + minute + 30;
+    const endHour = Math.floor(endTotalMinutes / 60);
+    const endMinute = endTotalMinutes % 60;
+
+    setBloqueoInitialValues({
+      id_sucursal: selectedSucursal !== "all" ? selectedSucursal : undefined,
+      id_empleado: professionalId.toString(),
+      fecha: format(date, "yyyy-MM-dd"),
+      hora_inicio: `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`,
+      hora_fin: `${endHour.toString().padStart(2, "0")}:${endMinute.toString().padStart(2, "0")}`,
+    });
+    setBloqueoDialogOpen(true);
+  };
+
   return (
     <div className="space-y-5 md:space-y-6">
       {/* Header */}
@@ -465,7 +500,39 @@ const Agenda = () => {
             </p>
           </div>
           <div className="flex gap-2 w-full sm:w-auto">
-            <Button variant="outline" onClick={() => setBloqueoDialogOpen(true)} className="flex-1 sm:flex-none">
+            <div className="flex rounded-md border border-input overflow-hidden h-10">
+              <Button
+                variant="ghost"
+                className={`rounded-none border-0 h-10 px-4 ${
+                  viewRange === "day"
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
+                    : ""
+                }`}
+                onClick={() => setViewRange("day")}
+              >
+                Día
+              </Button>
+              <Button
+                variant="ghost"
+                className={`rounded-none border-0 border-l border-input h-10 px-4 ${
+                  viewRange === "week"
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
+                    : ""
+                }`}
+                onClick={() => setViewRange("week")}
+              >
+                Semana
+              </Button>
+            </div>
+
+            <Button
+              variant="outline"
+              onClick={() => {
+                setBloqueoInitialValues({ fecha: format(selectedDate, "yyyy-MM-dd") });
+                setBloqueoDialogOpen(true);
+              }}
+              className="flex-1 sm:flex-none"
+            >
               <Ban className="h-4 w-4 mr-2" />
               Bloquear horario
             </Button>
@@ -622,6 +689,14 @@ const Agenda = () => {
                   }
                 }}
                 onStartReschedule={handleStartReschedule}
+                onBlockTime={(professionalId, hour, minute = 0) => {
+                  openQuickBloqueo({
+                    professionalId,
+                    hour,
+                    minute,
+                    date: selectedDate,
+                  });
+                }}
               />
             ) : (
               <Card>
@@ -700,6 +775,14 @@ const Agenda = () => {
                 }
               }}
               onStartReschedule={handleStartReschedule}
+              onBlockTime={(professionalId, hour, date) => {
+                openQuickBloqueo({
+                  professionalId,
+                  hour,
+                  minute: 0,
+                  date,
+                });
+              }}
             />
           )
         ) : appointments && appointments.length > 0 ? (
@@ -735,6 +818,7 @@ const Agenda = () => {
         sucursales={sucursales}
         empleados={empleados}
         defaultDate={selectedDate}
+        initialValues={bloqueoInitialValues}
       />
 
       <BloqueoDetailDialog

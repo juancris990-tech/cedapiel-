@@ -1,4 +1,5 @@
 import { Plus, Clock, ChevronsUpDown, CalendarClock } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { format, addDays, startOfWeek, isSameDay } from "date-fns";
 import { es } from "date-fns/locale";
 import { parseDateOnlyToLocal } from "@/lib/date";
@@ -93,6 +94,7 @@ interface WeeklyCalendarProps {
   onAppointmentClick: (appointmentId: number | string) => void;
   onBloqueoClick: (bloqueoId: number) => void;
   onAddAppointment?: (professionalId: number, hour: number, date: Date) => void;
+  onBlockTime?: (professionalId: number, hour: number, date: Date) => void;
   onExtendAppointment?: (appointment: Appointment, minutes: number) => void;
   onStartReschedule?: (appointment: Appointment) => void;
 }
@@ -332,6 +334,7 @@ function DraggableCompactAppointment({
   const horaInicio = apt.hora_inicio?.substring(0, 5) || "";
   const horaFin = apt.hora_fin?.substring(0, 5) || "";
   const precio = apt.servicios?.precio ? `$${apt.servicios.precio}` : "";
+  const employeeDisplayName = `${apt.empleados?.nombre || ""} ${apt.empleados?.apellidos || ""}`.trim() || professionalName;
 
   const borderColor = getEstadoBorderColor(apt.estado);
   const bgColor = getEstadoBgColor(apt.estado);
@@ -491,8 +494,11 @@ function DraggableCompactAppointment({
                 {apt.clientes?.nombre} {apt.clientes?.apellidos}
               </p>
             </div>
+            <p className="text-[10px] font-medium text-foreground truncate">
+              Servicio: {apt.servicios?.nombre || "Sin servicio"} {precio && `(${precio})`}
+            </p>
             <p className="text-[10px] text-muted-foreground truncate">
-              {apt.servicios?.nombre} {precio && `(${precio})`}
+              Profesional: {employeeDisplayName}
             </p>
             <p className={`text-[10px] font-medium truncate ${isResizing ? 'text-primary' : 'text-muted-foreground'}`}>
               {horaInicio} - {displayHoraFin} ({displayDuration} min)
@@ -548,8 +554,11 @@ function DraggableCompactAppointment({
                     {apt.clientes?.nombre} {apt.clientes?.apellidos}
                   </p>
                 </div>
+                <p className="text-[10px] font-medium text-foreground truncate">
+                  Servicio: {apt.servicios?.nombre || "Sin servicio"} {precio && `(${precio})`}
+                </p>
                 <p className="text-[10px] text-muted-foreground truncate">
-                  {apt.servicios?.nombre} {precio && `(${precio})`}
+                  Profesional: {employeeDisplayName}
                 </p>
                 <p className={`text-[10px] font-medium truncate ${isResizing ? 'text-primary' : 'text-muted-foreground'}`}>
                   {horaInicio} - {displayHoraFin} ({displayDuration} min)
@@ -647,6 +656,7 @@ function DroppableTimeSlot({
   hasBloqueos,
   colorConfig,
   onEmptyClick,
+  onBlockTime,
   isOver,
   hasContent
 }: { 
@@ -655,11 +665,13 @@ function DroppableTimeSlot({
   hasBloqueos: boolean;
   colorConfig: { bg: string; border: string };
   onEmptyClick?: () => void;
+  onBlockTime?: () => void;
   isOver?: boolean;
   hasContent?: boolean;
 }) {
   const { setNodeRef, isOver: droppableIsOver } = useDroppable({ id });
   const isHovered = isOver ?? droppableIsOver;
+  const [showQuickMenu, setShowQuickMenu] = useState(false);
 
   const handleBackgroundClick = (e: React.MouseEvent) => {
     // Only trigger if clicking on the background itself or empty overlay
@@ -668,7 +680,7 @@ function DroppableTimeSlot({
     
     if ((target === currentTarget || target.closest('[data-empty-overlay]')) && !hasBloqueos) {
       e.stopPropagation();
-      onEmptyClick?.();
+      setShowQuickMenu((prev) => !prev);
     }
   };
 
@@ -685,16 +697,49 @@ function DroppableTimeSlot({
       }`}
     >
       {/* Clickable overlay for empty slots */}
-      {!hasContent && !hasBloqueos && (
+      {!hasContent && !hasBloqueos && !showQuickMenu && (
         <div 
           data-empty-overlay
           className="absolute inset-0 flex items-center justify-center cursor-pointer"
           onClick={(e) => {
             e.stopPropagation();
-            onEmptyClick?.();
+            setShowQuickMenu((prev) => !prev);
           }}
         >
           <Plus className="h-4 w-4 text-muted-foreground/30" />
+        </div>
+      )}
+
+      {showQuickMenu && !hasContent && !hasBloqueos && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/70 backdrop-blur-[1px] rounded-md">
+          <div className="w-[170px] rounded-md border bg-popover p-2 shadow-lg space-y-1">
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full justify-start h-8"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowQuickMenu(false);
+                onEmptyClick?.();
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Agendar cita
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full justify-start h-8"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowQuickMenu(false);
+                onBlockTime?.();
+              }}
+            >
+              <CalendarClock className="mr-2 h-4 w-4" />
+              Bloquear tiempo
+            </Button>
+          </div>
         </div>
       )}
       <div className="relative z-10">
@@ -711,6 +756,7 @@ function DroppableDayCell({
   hasBloqueos,
   colorConfig,
   onEmptyClick,
+  onBlockTime,
   hasContent
 }: {
   id: string;
@@ -718,9 +764,11 @@ function DroppableDayCell({
   hasBloqueos: boolean;
   colorConfig: { bg: string; border: string };
   onEmptyClick?: () => void;
+  onBlockTime?: () => void;
   hasContent?: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
+  const [showQuickMenu, setShowQuickMenu] = useState(false);
 
   const handleBackgroundClick = (e: React.MouseEvent) => {
     // Only trigger if clicking on the background itself, not on children
@@ -730,7 +778,7 @@ function DroppableDayCell({
     // Check if the click is on the container or on the empty state overlay
     if (target === currentTarget || target.closest('[data-empty-overlay]')) {
       e.stopPropagation();
-      onEmptyClick?.();
+      setShowQuickMenu((prev) => !prev);
     }
   };
 
@@ -747,16 +795,49 @@ function DroppableDayCell({
       onClick={handleBackgroundClick}
     >
       {/* Clickable overlay for empty areas */}
-      {!hasContent && !hasBloqueos && (
+      {!hasContent && !hasBloqueos && !showQuickMenu && (
         <div 
           data-empty-overlay
           className="absolute inset-0 flex items-center justify-center cursor-pointer"
           onClick={(e) => {
             e.stopPropagation();
-            onEmptyClick?.();
+            setShowQuickMenu((prev) => !prev);
           }}
         >
           <Plus className="h-4 w-4 text-muted-foreground/50" />
+        </div>
+      )}
+
+      {showQuickMenu && !hasContent && !hasBloqueos && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/70 backdrop-blur-[1px] rounded-md">
+          <div className="w-[170px] rounded-md border bg-popover p-2 shadow-lg space-y-1">
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full justify-start h-8"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowQuickMenu(false);
+                onEmptyClick?.();
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Agendar cita
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full justify-start h-8"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowQuickMenu(false);
+                onBlockTime?.();
+              }}
+            >
+              <CalendarClock className="mr-2 h-4 w-4" />
+              Bloquear tiempo
+            </Button>
+          </div>
         </div>
       )}
       <div className="relative z-10">
@@ -776,6 +857,7 @@ export function WeeklyCalendar({
   onAppointmentClick, 
   onBloqueoClick,
   onAddAppointment,
+  onBlockTime,
   onExtendAppointment,
   onStartReschedule
 }: WeeklyCalendarProps) {
@@ -1036,6 +1118,7 @@ export function WeeklyCalendar({
                       hasContent={hasContent}
                       colorConfig={colorConfig}
                       onEmptyClick={() => onAddAppointment?.(professional.id, hour, day)}
+                      onBlockTime={() => onBlockTime?.(professional.id, hour, day)}
                     >
                       {hasBloqueos && dayBloqueos.map((bloqueo) => (
                         <div
@@ -1180,6 +1263,7 @@ export function WeeklyCalendar({
                         colorConfig={colorConfig}
                         hasContent={hasContent}
                         onEmptyClick={() => onAddAppointment?.(prof.id, 9, day)}
+                        onBlockTime={() => onBlockTime?.(prof.id, 9, day)}
                       >
                         {/* Bloqueos */}
                         {dayBloqueos.map((bloqueo) => (
