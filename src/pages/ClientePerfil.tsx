@@ -18,6 +18,20 @@ export default function ClientePerfil() {
   const navigate = useNavigate();
   const clienteId = parseInt(id || "0");
 
+  const estadosCompletada = ["finalizada", "asistida", "completada", "completado"];
+  const estadosNoShow = ["no_asiste", "no_show"];
+
+  const formatFecha = (fecha?: string | null) => {
+    if (!fecha) return "-";
+    const parsed = new Date(fecha);
+    if (Number.isNaN(parsed.getTime())) return fecha;
+    return parsed.toLocaleDateString("es-CL", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
   // Datos del cliente
   const { data: cliente, isLoading } = useQuery({
     queryKey: ["cliente", clienteId],
@@ -33,15 +47,46 @@ export default function ClientePerfil() {
     enabled: !!clienteId,
   });
 
-  // Stats: historial de citas del cliente
+  // Stats reales: historial de citas del cliente
   const { data: citasData } = useQuery({
     queryKey: ["cliente-citas-stats", clienteId],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("citas")
+      const { data, error } = await supabase
+        .from("agendas")
         .select("id, fecha, estado, precio_total")
-        .eq("cliente_id", clienteId)
+        .eq("id_cliente", clienteId)
         .order("fecha", { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!clienteId,
+  });
+
+  // Ventas reales del cliente para gasto acumulado
+  const { data: ventasData } = useQuery({
+    queryKey: ["cliente-ventas-stats", clienteId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("ventas")
+        .select("id, total, monto_final_mxn")
+        .eq("id_cliente", clienteId);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!clienteId,
+  });
+
+  // Notas internas del cliente para detectar alertas
+  const { data: notasCliente } = useQuery({
+    queryKey: ["cliente-notas-alerta", clienteId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("notas_clientes")
+        .select("id, nota, creado_en")
+        .eq("id_cliente", clienteId)
+        .order("creado_en", { ascending: false });
+
+      if (error) throw error;
       return data || [];
     },
     enabled: !!clienteId,
@@ -56,9 +101,18 @@ export default function ClientePerfil() {
 
   // Calcular stats
   const totalCitas = citasData?.length || 0;
-  const totalGasto = citasData?.reduce((sum, c) => sum + (Number(c.precio_total) || 0), 0) || 0;
-  const noShows = citasData?.filter((c) => c.estado === "no_show").length || 0;
-  const ultimaVisita = citasData?.find((c) => c.estado === "completada");
+  const totalGasto = ventasData?.reduce((sum, venta) => {
+    return sum + (Number(venta.monto_final_mxn ?? venta.total) || 0);
+  }, 0) || 0;
+  const noShows = citasData?.filter((c) => estadosNoShow.includes(String(c.estado || "").toLowerCase())).length || 0;
+  const ultimaVisita = citasData?.find((c) => estadosCompletada.includes(String(c.estado || "").toLowerCase()));
+
+  const alertaDesdeCliente = typeof cliente.alertas === "string" && cliente.alertas.trim().length > 0
+    ? cliente.alertas.trim()
+    : null;
+
+  const alertaDesdeNotas = notasCliente?.find((n) => /alerta|precauci[oó]n|riesgo|contraindic/i.test(n.nota || ""))?.nota;
+  const alertaInterna = alertaDesdeCliente || alertaDesdeNotas || null;
 
   // Iniciales para el avatar
   const iniciales = [cliente.nombre?.[0], cliente.apellidos?.[0]]
@@ -95,7 +149,7 @@ export default function ClientePerfil() {
 
             {/* Avatar con iniciales */}
             <div className="flex-shrink-0">
-              <div className="h-20 w-20 rounded-2xl bg-primary/10 text-primary border border-primary/20 flex items-center justify-center text-2xl font-bold select-none">
+              <div className="h-20 w-20 rounded-full bg-primary/10 text-primary border border-primary/20 flex items-center justify-center text-2xl font-bold select-none">
                 {iniciales}
               </div>
             </div>
@@ -114,7 +168,7 @@ export default function ClientePerfil() {
                     {noShows} no-show{noShows > 1 ? "s" : ""}
                   </span>
                 )}
-                {cliente.alertas && (
+                {alertaInterna && (
                   <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-300">
                     <AlertCircle className="h-3 w-3" /> Alerta
                   </span>
@@ -149,16 +203,16 @@ export default function ClientePerfil() {
                 {ultimaVisita && (
                   <div className="flex items-center gap-2">
                     <Clock className="h-4 w-4" />
-                    <span>Última visita: {ultimaVisita.fecha}</span>
+                    <span>Última visita: {formatFecha(ultimaVisita.fecha)}</span>
                   </div>
                 )}
               </div>
 
               {/* Banner de alerta interna */}
-              {cliente.alertas && (
+              {alertaInterna && (
                 <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-md p-3 text-sm text-red-700">
                   <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                  <span><strong>Alerta interna:</strong> {cliente.alertas}</span>
+                  <span><strong>Alerta interna:</strong> {alertaInterna}</span>
                 </div>
               )}
             </div>
@@ -170,15 +224,13 @@ export default function ClientePerfil() {
                 <p className="text-xs text-muted-foreground mt-0.5">Citas</p>
               </div>
               <div className="text-center bg-muted rounded-xl p-3 min-w-[80px]">
-                <p className="text-xl font-bold">${totalGasto.toLocaleString("es-MX")}</p>
+                <p className="text-xl font-bold">${totalGasto.toLocaleString("es-CL")}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">Gastado</p>
               </div>
-              {noShows > 0 && (
-                <div className="text-center bg-red-50 border border-red-200 rounded-xl p-3 min-w-[80px]">
-                  <p className="text-2xl font-bold text-red-600">{noShows}</p>
-                  <p className="text-xs text-red-500 mt-0.5">No-shows</p>
-                </div>
-              )}
+              <div className="text-center bg-red-50 border border-red-200 rounded-xl p-3 min-w-[80px]">
+                <p className="text-2xl font-bold text-red-600">{noShows}</p>
+                <p className="text-xs text-red-500 mt-0.5">No-shows</p>
+              </div>
             </div>
           </div>
         </CardContent>
@@ -304,11 +356,11 @@ export default function ClientePerfil() {
                             {cita.estado?.replace("_", " ") || "pendiente"}
                           </span>
                         </p>
-                        <p className="text-xs text-muted-foreground">{cita.fecha}</p>
+                        <p className="text-xs text-muted-foreground">{formatFecha(cita.fecha)}</p>
                       </div>
                       {cita.precio_total && (
                         <p className="text-sm font-medium text-right">
-                          ${Number(cita.precio_total).toLocaleString("es-MX")}
+                          ${Number(cita.precio_total).toLocaleString("es-CL")}
                         </p>
                       )}
                     </div>
