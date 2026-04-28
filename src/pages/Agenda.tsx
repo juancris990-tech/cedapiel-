@@ -449,44 +449,52 @@ const Agenda = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 md:space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-            <Calendar className="h-8 w-8" />
+      <div className="rounded-2xl border border-border/70 bg-card p-4 md:p-5 shadow-sm">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight flex items-center gap-2">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Calendar className="h-5 w-5" />
+              </span>
             Agenda
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Gestiona las citas y horarios de los profesionales
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setBloqueoDialogOpen(true)}>
-            <Ban className="h-4 w-4 mr-2" />
-            Bloquear Horario
-          </Button>
-          <AppointmentDialog />
+            </h1>
+            <p className="text-muted-foreground mt-1 text-sm md:text-base">
+              Gestiona citas, profesionales y bloqueos en una sola vista.
+            </p>
+          </div>
+          <div className="flex gap-2 w-full sm:w-auto">
+            <Button variant="outline" onClick={() => setBloqueoDialogOpen(true)} className="flex-1 sm:flex-none">
+              <Ban className="h-4 w-4 mr-2" />
+              Bloquear horario
+            </Button>
+            <div className="flex-1 sm:flex-none">
+              <AppointmentDialog />
+            </div>
+          </div>
         </div>
       </div>
 
-      <AgendaFilters
-        selectedDate={selectedDate}
-        onDateChange={setSelectedDate}
-        selectedSucursal={selectedSucursal}
-        onSucursalChange={setSelectedSucursal}
-        selectedEmpleado={selectedEmpleado}
-        onEmpleadoChange={setSelectedEmpleado}
-        selectedEstado={selectedEstado}
-        onEstadoChange={setSelectedEstado}
-        selectedServicio={selectedServicio}
-        onServicioChange={setSelectedServicio}
-        sucursales={sucursales}
-        empleados={empleados}
-        servicios={servicios}
-        viewRange={viewRange}
-        onViewRangeChange={setViewRange}
-      />
+      <div className="rounded-xl border border-border/70 bg-card p-3 md:p-4 shadow-sm">
+        <AgendaFilters
+          selectedDate={selectedDate}
+          onDateChange={setSelectedDate}
+          selectedSucursal={selectedSucursal}
+          onSucursalChange={setSelectedSucursal}
+          selectedEmpleado={selectedEmpleado}
+          onEmpleadoChange={setSelectedEmpleado}
+          selectedEstado={selectedEstado}
+          onEstadoChange={setSelectedEstado}
+          selectedServicio={selectedServicio}
+          onServicioChange={setSelectedServicio}
+          sucursales={sucursales}
+          empleados={empleados}
+          servicios={servicios}
+          viewRange={viewRange}
+          onViewRangeChange={setViewRange}
+        />
+      </div>
 
       {/* Reschedule mode banner */}
       {rescheduleMode && appointmentToReschedule && (
@@ -515,7 +523,7 @@ const Agenda = () => {
       {/* Sticky: solo Tabs + KPIs (como en la imagen) */}
       <div
         ref={stickyRef}
-        className="sticky top-0 z-30 -mx-6 px-6 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 py-4 border-b border-border/60 shadow-sm"
+        className="sticky top-0 z-30 rounded-xl border border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85 p-3 md:p-4 shadow-sm"
       >
         <div className="space-y-4">
           <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as "calendar" | "table")}>

@@ -2,12 +2,12 @@ import { useState, useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import AppLayout from "@/components/layout/AppLayout";
 import { POSClienteSelector } from "@/components/pos/POSClienteSelector";
 import { POSBuscador } from "@/components/pos/POSBuscador";
 import { POSCarrito } from "@/components/pos/POSCarrito";
 import { VentasPendientes } from "@/components/pos/VentasPendientes";
 import { Card } from "@/components/ui/card";
+import { ShoppingCart } from "lucide-react";
 
 export default function POS() {
   const location = useLocation();
@@ -132,60 +132,65 @@ export default function POS() {
   };
 
   return (
-    <AppLayout>
-      <div className="container mx-auto p-6 space-y-6">
+    <div className="space-y-5 md:space-y-6">
+      <div className="rounded-2xl border border-border/70 bg-card p-4 md:p-5 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Punto de Venta (POS)</h1>
-            <p className="text-muted-foreground">Gestiona ventas de servicios y productos</p>
-          </div>
-        </div>
-
-        {/* Ventas Pendientes */}
-        {!idVenta && <VentasPendientes onSeleccionarVenta={handleSeleccionarVentaPendiente} />}
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Panel Izquierdo: Cliente + Búsqueda */}
-          <div className="space-y-4">
-            <POSClienteSelector
-              onVentaCreada={handleVentaCreada}
-              ventaActual={idVenta}
-              clienteActual={idCliente}
-              sucursalActual={idSucursal}
-              onReiniciar={handleNuevaVenta}
-            />
-            
-            {idVenta ? (
-              <POSBuscador 
-                idVenta={idVenta}
-                onItemAgregado={handleItemAgregado}
-              />
-            ) : (
-              <Card className="p-8 text-center border-dashed">
-                <p className="text-muted-foreground">
-                  Selecciona Cliente y Sucursal, luego inicia la venta para agregar servicios y productos
-                </p>
-              </Card>
-            )}
-          </div>
-
-          {/* Panel Derecho: Carrito */}
-          <div>
-            {idVenta && idCliente ? (
-              <POSCarrito 
-                idVenta={idVenta}
-                idCliente={idCliente}
-                refreshTrigger={refreshCarrito}
-                onVentaCerrada={handleNuevaVenta}
-              />
-            ) : (
-              <Card className="p-8 text-center text-muted-foreground">
-                <p className="text-lg">Selecciona un cliente para comenzar</p>
-              </Card>
-            )}
+            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight flex items-center gap-2">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <ShoppingCart className="h-5 w-5" />
+              </span>
+              Punto de Venta (POS)
+            </h1>
+            <p className="text-muted-foreground text-sm md:text-base">Gestiona ventas de servicios y productos en un flujo simple</p>
           </div>
         </div>
       </div>
-    </AppLayout>
+
+      {/* Ventas Pendientes */}
+      {!idVenta && <VentasPendientes onSeleccionarVenta={handleSeleccionarVentaPendiente} />}
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(420px,1fr)_minmax(420px,1fr)] gap-5 md:gap-6">
+        {/* Panel Izquierdo: Cliente + Búsqueda */}
+        <div className="space-y-4">
+          <POSClienteSelector
+            onVentaCreada={handleVentaCreada}
+            ventaActual={idVenta}
+            clienteActual={idCliente}
+            sucursalActual={idSucursal}
+            onReiniciar={handleNuevaVenta}
+          />
+          
+          {idVenta ? (
+            <POSBuscador 
+              idVenta={idVenta}
+              onItemAgregado={handleItemAgregado}
+            />
+          ) : (
+            <Card className="p-8 text-center border-dashed border-border/70 bg-card/60">
+              <p className="text-muted-foreground">
+                Selecciona cliente y sucursal para iniciar la venta y agregar servicios o productos.
+              </p>
+            </Card>
+          )}
+        </div>
+
+        {/* Panel Derecho: Carrito */}
+        <div>
+          {idVenta && idCliente ? (
+            <POSCarrito 
+              idVenta={idVenta}
+              idCliente={idCliente}
+              refreshTrigger={refreshCarrito}
+              onVentaCerrada={handleNuevaVenta}
+            />
+          ) : (
+            <Card className="p-8 text-center text-muted-foreground border-border/70 bg-card/70">
+              <p className="text-lg">Selecciona un cliente para comenzar</p>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
