@@ -1,4 +1,3 @@
-import { User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -7,10 +6,11 @@ import { toast } from "sonner";
 import { useLocation, useNavigate } from "react-router-dom";
 
 interface AppHeaderProps {
-  user: User;
+  userEmail: string;
+  isDemoMode?: boolean;
 }
 
-const AppHeader = ({ user }: AppHeaderProps) => {
+const AppHeader = ({ userEmail, isDemoMode = false }: AppHeaderProps) => {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -33,6 +33,13 @@ const AppHeader = ({ user }: AppHeaderProps) => {
       .replace(/-/g, " ");
 
   const handleLogout = async () => {
+    if (isDemoMode) {
+      localStorage.removeItem("demo_mode");
+      toast.success("Modo demo finalizado");
+      navigate("/auth");
+      return;
+    }
+
     try {
       await supabase.auth.signOut();
       toast.success("Sesión cerrada");
@@ -53,7 +60,7 @@ const AppHeader = ({ user }: AppHeaderProps) => {
       </div>
       <div className="flex items-center gap-2 md:gap-3">
         <span className="hidden sm:inline text-sm text-muted-foreground max-w-[220px] truncate">
-          {user.email}
+          {userEmail}
         </span>
         <Button variant="outline" size="icon" onClick={handleLogout} className="h-9 w-9">
           <LogOut className="h-4 w-4" />

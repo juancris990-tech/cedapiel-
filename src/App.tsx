@@ -63,7 +63,7 @@ const App = () => (
           <Route path="/ventas" element={<AppLayout><Ventas /></AppLayout>} />
           <Route path="/pos" element={<AppLayout><POS /></AppLayout>} />
           <Route path="/finanzas" element={<AppLayout><Finanzas /></AppLayout>} />
-          <Route path="/rrhh" element={<RecursosHumanos />} />
+          <Route path="/rrhh" element={<AppLayout><RecursosHumanos /></AppLayout>} />
           <Route path="/api-config" element={<AppLayout><ApiConfig /></AppLayout>} />
           <Route path="/marketing" element={<AppLayout><Marketing /></AppLayout>} />
           <Route path="/crm" element={<AppLayout><CRM /></AppLayout>} />
@@ -94,9 +94,9 @@ const App = () => (
           <Route path="/proyeccion-valor-futuro" element={<AppLayout><ProyeccionValorFuturo /></AppLayout>} />
           <Route path="/ventas-categorias" element={<AppLayout><VentasCategorias /></AppLayout>} />
           <Route path="/catalogo-servicios" element={<AppLayout><CatalogoServicios /></AppLayout>} />
-          <Route path="/usuarios" element={<Usuarios />} />
-          <Route path="/usuarios/:id" element={<UsuarioPerfil />} />
-          <Route path="/mi-perfil" element={<MiPerfil />} />
+          <Route path="/usuarios" element={<AppLayout><Usuarios /></AppLayout>} />
+          <Route path="/usuarios/:id" element={<AppLayout><UsuarioPerfil /></AppLayout>} />
+          <Route path="/mi-perfil" element={<AppLayout><MiPerfil /></AppLayout>} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>

@@ -15,9 +15,18 @@ const AppLayout = ({ children }: AppLayoutProps) => {
   const location = useLocation();
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    const demoModeEnabled = localStorage.getItem("demo_mode") === "true";
+    setIsDemoMode(demoModeEnabled);
+
+    if (demoModeEnabled) {
+      setIsLoading(false);
+      return;
+    }
+
     // Check current session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -54,7 +63,7 @@ const AppLayout = ({ children }: AppLayoutProps) => {
     );
   }
 
-  if (!user || !session) {
+  if (!isDemoMode && (!user || !session)) {
     return null;
   }
 
@@ -63,7 +72,10 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       <div className="h-svh flex w-full overflow-hidden bg-background">
         <AppSidebar />
         <div className="flex-1 min-w-0 flex flex-col min-h-0 bg-muted/30">
-          <AppHeader user={user} />
+          <AppHeader
+            userEmail={isDemoMode ? "demo@cedapiel.local" : user?.email ?? ""}
+            isDemoMode={isDemoMode}
+          />
           <main className="flex-1 min-h-0 overflow-auto">
             <div className="mx-auto w-full max-w-[1600px] px-4 py-4 md:px-6 md:py-6">
               {children}
