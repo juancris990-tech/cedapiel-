@@ -19,7 +19,7 @@ import {
   CalendarX,
   DollarSign,
   FileText,
-  TrendingUp,
+  ShoppingCart,
   UserCheck,
   Users,
 } from "lucide-react";
@@ -28,20 +28,21 @@ import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 
 type DashboardStats = {
   citasHoy: number;
   ingresosMes: number;
   clientesActivos: number;
   noShows30Dias: number;
-  resumenHoy: {
-    completadas: number;
-    pendientes: number;
-    canceladas: number;
-    total: number;
-  };
   citasPorDiaSemana: Array<{ dia: string; citas: number }>;
+  proximasCitasHoy: Array<{
+    id: string;
+    hora: string;
+    cliente: string;
+    servicio: string;
+    profesional: string;
+    estado: string;
+  }>;
 };
 
 const COMPLETADAS = new Set(["finalizada", "asistida", "completada", "completed"]);
@@ -58,6 +59,8 @@ const CANCELADAS = new Set(["cancelada", "cancelada_cliente", "cancelada_clinica
 const NO_SHOWS = new Set(["no_show", "no_asiste", "did_not_show", "didnotshow", "no-show"]);
 
 const normalizeEstado = (estado?: string | null) => (estado || "").toLowerCase().trim();
+
+const formatHour = (value?: string | null) => (value || "").slice(0, 5) || "--:--";
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat("es-CL", {
@@ -92,7 +95,9 @@ const Dashboard = () => {
       ] = await Promise.all([
         supabase
           .from("agendas")
-          .select("id, estado, fecha")
+          .select(
+            "id, estado, fecha, hora_inicio, clientes(nombre, apellidos), servicios(nombre), empleados(nombre, apellidos)"
+          )
           .gte("fecha", inicioHoy)
           .lte("fecha", finHoy),
         supabase
@@ -119,25 +124,6 @@ const Dashboard = () => {
       const citasSemana = citasSemanaRes.data || [];
       const ventasMes = ventasMesRes.data || [];
 
-      const resumenHoy = citasHoy.reduce(
-        (acc, cita) => {
-          const estado = normalizeEstado(cita.estado);
-          if (COMPLETADAS.has(estado)) {
-            acc.completadas += 1;
-          } else if (CANCELADAS.has(estado) || NO_SHOWS.has(estado)) {
-            acc.canceladas += 1;
-          } else if (PENDIENTES.has(estado) || !estado) {
-            acc.pendientes += 1;
-          } else {
-            acc.pendientes += 1;
-          }
-
-          acc.total += 1;
-          return acc;
-        },
-        { completadas: 0, pendientes: 0, canceladas: 0, total: 0 }
-      );
-
       const noShows30Dias = citas30Dias.filter((cita) => NO_SHOWS.has(normalizeEstado(cita.estado))).length;
 
       const ingresosMes = ventasMes.reduce((sum, venta) => sum + Number(venta.total || 0), 0);
@@ -156,13 +142,36 @@ const Dashboard = () => {
         citas: acumuladoDias[index],
       }));
 
+      const nowTime = format(now, "HH:mm:ss");
+      const proximasCitasHoy = citasHoy
+        .filter((cita) => {
+          const estado = normalizeEstado(cita.estado);
+          return !COMPLETADAS.has(estado) && !CANCELADAS.has(estado) && !NO_SHOWS.has(estado);
+        })
+        .filter((cita) => !cita.hora_inicio || cita.hora_inicio >= nowTime)
+        .sort((a, b) => (a.hora_inicio || "").localeCompare(b.hora_inicio || ""))
+        .slice(0, 8)
+        .map((cita) => {
+          const clienteNombre = [cita.clientes?.nombre, cita.clientes?.apellidos].filter(Boolean).join(" ").trim();
+          const profesionalNombre = [cita.empleados?.nombre, cita.empleados?.apellidos].filter(Boolean).join(" ").trim();
+
+          return {
+            id: String(cita.id),
+            hora: formatHour(cita.hora_inicio),
+            cliente: clienteNombre || "Paciente sin nombre",
+            servicio: cita.servicios?.nombre || "Servicio no especificado",
+            profesional: profesionalNombre || "Sin asignar",
+            estado: normalizeEstado(cita.estado) || "agendada",
+          };
+        });
+
       return {
         citasHoy: citasHoy.length,
         ingresosMes,
         clientesActivos: clientesActivosRes.count || 0,
         noShows30Dias,
-        resumenHoy,
         citasPorDiaSemana,
+        proximasCitasHoy,
       };
     },
   });
@@ -187,23 +196,16 @@ const Dashboard = () => {
     };
   }, [queryClient]);
 
-  const summary = stats?.resumenHoy ?? { completadas: 0, pendientes: 0, canceladas: 0, total: 0 };
-  const pct = {
-    completadas: summary.total ? Math.round((summary.completadas / summary.total) * 100) : 0,
-    pendientes: summary.total ? Math.round((summary.pendientes / summary.total) * 100) : 0,
-    canceladas: summary.total ? Math.round((summary.canceladas / summary.total) * 100) : 0,
-  };
-  const tasaAsistencia = pct.completadas;
   const hoyIndex = (() => {
     const day = new Date().getDay();
     return day === 0 ? 6 : day - 1;
   })();
 
   const quickActions = [
-    { to: "/agenda", label: "Nueva Cita", icon: Calendar },
-    { to: "/clientes", label: "Nuevo Cliente", icon: Users },
-    { to: "/ventas", label: "Nueva Venta", icon: DollarSign },
-    { to: "/reportes", label: "Ver reportes", icon: FileText },
+    { to: "/agenda", label: "Agenda", icon: Calendar },
+    { to: "/clientes", label: "Clientes", icon: Users },
+    { to: "/pos", label: "POS", icon: ShoppingCart },
+    { to: "/reportes", label: "Reportes", icon: FileText },
   ];
 
   return (
@@ -266,42 +268,40 @@ const Dashboard = () => {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card>
+        <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Resumen de hoy</CardTitle>
-            <CardDescription>Citas completadas, pendientes y canceladas</CardDescription>
+            <CardTitle>Resumen del día</CardTitle>
+            <CardDescription>Próximas citas pendientes de atención</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Completadas</p>
-                <p className="text-2xl font-semibold">{summary.completadas}</p>
-                <p className="text-xs text-muted-foreground">{pct.completadas}% del día</p>
+          <CardContent>
+            {stats?.proximasCitasHoy?.length ? (
+              <div className="space-y-2">
+                {stats.proximasCitasHoy.map((cita) => (
+                  <div key={cita.id} className="rounded-xl border border-border/80 bg-background/80 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-3">
+                        <Badge variant="secondary" className="font-semibold">
+                          {cita.hora}
+                        </Badge>
+                        <div>
+                          <p className="font-medium leading-tight">{cita.cliente}</p>
+                          <p className="text-xs text-muted-foreground">{cita.servicio}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm text-muted-foreground">{cita.profesional}</p>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">{cita.estado}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Pendientes</p>
-                <p className="text-2xl font-semibold">{summary.pendientes}</p>
-                <p className="text-xs text-muted-foreground">{pct.pendientes}% del día</p>
+            ) : (
+              <div className="rounded-xl border border-dashed p-6 text-center">
+                <p className="font-medium">No hay más citas pendientes para hoy</p>
+                <p className="mt-1 text-sm text-muted-foreground">Todo al día en la agenda actual.</p>
               </div>
-              <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Canceladas</p>
-                <p className="text-2xl font-semibold">{summary.canceladas}</p>
-                <p className="text-xs text-muted-foreground">{pct.canceladas}% del día</p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>Tasa de asistencia</span>
-                <span>{summary.total} citas totales</span>
-              </div>
-              <Progress value={tasaAsistencia} className="h-2" />
-              <div className="flex flex-wrap gap-2 text-xs">
-                <Badge variant="outline">Asistencia: {tasaAsistencia}%</Badge>
-                <Badge variant="outline">Pendientes: {pct.pendientes}%</Badge>
-                <Badge variant="outline">Canceladas: {pct.canceladas}%</Badge>
-              </div>
-            </div>
+            )}
           </CardContent>
         </Card>
 
